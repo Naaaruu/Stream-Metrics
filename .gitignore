@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 환경 변수
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# 기타
+*.log
+*.db
