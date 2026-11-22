@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Hls from 'hls.js';
+import LivePlayer from './LivePlayer.jsx';
+import VodPlayer from './VodPlayer.jsx';
 import {
-  Activity, AlertTriangle, ArrowRight, ArrowUpRight, BarChart3,
+  Activity, ArrowRight, ArrowUpRight, BarChart3,
   CalendarDays, CheckCircle2, Clock3, Database, Download,
   FileText, FlaskConical, Gauge, GitCompareArrows, Info, LayoutDashboard,
-  Menu, Play, Settings, Signal, SlidersHorizontal, Radio,
+  Menu, Settings, Signal, SlidersHorizontal, Radio,
   Video, Wifi, X, Zap,
 } from 'lucide-react';
 import {
@@ -14,6 +15,8 @@ import {
 import {
   getLatest, getMergedHistory, getStats, initialHistory, makeSample, SCENARIOS,
 } from './data/mockMetrics.js';
+import { DEFAULT_CONDITIONS, simulateNetworkSample, validateConditions } from './data/networkExperiment.js';
+import { alignByTimestamp, recordingCsv, summarizeRecording } from './data/comparison.js';
 import './App.css';
 
 const COLORS = { live: '#42cce5', vod: '#a68cff', good: '#55dda7', warning: '#f6b65f' };
@@ -161,7 +164,7 @@ function ChartTooltip({ active, payload, label, suffix = '' }) {
   );
 }
 
-function TrendChart({ data, lines, unit = 'ms', area = false, height = 224, legend = false }) {
+function TrendChart({ data, lines, unit = 'ms', area = false, height = 224, legend = false, timeDomain }) {
   const ChartComponent = area ? AreaChart : LineChart;
   return (
     <div className="chart-wrap" style={{ height }}>
@@ -173,7 +176,7 @@ function TrendChart({ data, lines, unit = 'ms', area = false, height = 224, lege
             ))}
           </defs>
           <CartesianGrid stroke="#1e2c40" strokeDasharray="4 6" vertical={false} />
-          <XAxis dataKey="timestamp" tickFormatter={(ts) => clock(ts).slice(3)} stroke="#61748d" tick={{ fill: '#71829a', fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={30} />
+          <XAxis dataKey="timestamp" type={timeDomain ? 'number' : 'category'} domain={timeDomain} tickFormatter={(ts) => clock(ts).slice(3)} stroke="#61748d" tick={{ fill: '#71829a', fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={30} />
           <YAxis tick={{ fill: '#71829a', fontSize: 11 }} stroke="#61748d" axisLine={false} tickLine={false} width={45} domain={['auto', 'auto']} />
           <Tooltip content={<ChartTooltip suffix={unit === '%' ? '%' : ''} />} />
           {legend && <Legend iconType="circle" iconSize={7} wrapperStyle={{ fontSize: 12, color: '#91a3b9', paddingTop: 8 }} />}
@@ -188,95 +191,8 @@ function TrendChart({ data, lines, unit = 'ms', area = false, height = 224, lege
   );
 }
 
-function ChartCard({ title, description, data, lines, unit, area = false, legend = false, height = 220, className = '' }) {
-  return <Card className={`chart-card ${className}`}><div className="chart-card-head"><div><h3>{title}</h3>{description && <p>{description}</p>}</div><span className="chart-unit">{unit}</span></div><TrendChart data={data} lines={lines} unit={unit} area={area} height={height} legend={legend} /></Card>;
-}
-
-function VideoPanel({ mode, url, onConnect, small = false, onMetrics }) {
-  const isLive = mode === 'live';
-  const videoRef = useRef(null);
-  const hlsRef = useRef(null);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !url) return undefined;
-
-    if (url.includes('.m3u8') && Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: true });
-      hls.loadSource(url);
-      hls.attachMedia(video);
-      hlsRef.current = hls;
-      return () => {
-        hls.destroy();
-        hlsRef.current = null;
-      };
-    }
-
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-      hlsRef.current = null;
-    }
-    video.src = url;
-    return undefined;
-  }, [url]);
-
-  useEffect(() => {
-    if (!url || !onMetrics) return undefined;
-    const timer = window.setInterval(() => {
-      const video = videoRef.current;
-      if (!video || video.readyState < 2) return;
-
-      let bufferSec = 0;
-      for (let i = 0; i < video.buffered.length; i += 1) {
-        if (video.buffered.start(i) <= video.currentTime && video.currentTime <= video.buffered.end(i)) {
-          bufferSec = video.buffered.end(i) - video.currentTime;
-          break;
-        }
-      }
-
-      let bitrateKbps = null;
-      const hls = hlsRef.current;
-      if (hls && hls.currentLevel >= 0 && hls.levels?.[hls.currentLevel]) {
-        bitrateKbps = Math.round(hls.levels[hls.currentLevel].bitrate / 1000);
-      }
-
-      onMetrics(mode, {
-        buffer: Number(bufferSec.toFixed(1)),
-        bitrate: bitrateKbps,
-        updatedAt: Date.now(),
-      });
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, [mode, url, onMetrics]);
-
-  return (
-    <div className={`video-panel video-${mode} ${small ? 'video-small' : ''}`}>
-      {url ? (
-        <video
-          ref={videoRef}
-          className="stream-video"
-          key={url}
-          controls
-          autoPlay
-          muted
-          playsInline
-          preload="metadata"
-          aria-label={`${isLive ? 'LIVE' : 'VOD'} 영상 재생`}
-        />
-      ) : (
-        <div className="video-placeholder">
-          <div className="video-orbit video-orbit-one" /><div className="video-orbit video-orbit-two" />
-          <div className="video-play-icon">{isLive ? <Radio size={32} /> : <Play size={34} fill="currentColor" />}</div>
-          <strong>{isLive ? 'LIVE STREAM' : 'ON-DEMAND VIDEO'}</strong>
-          <p>연결된 영상 소스가 없습니다</p>
-          {!small && <button className="video-source-btn" onClick={onConnect}>영상 소스 설정 <ArrowRight size={15} /></button>}
-        </div>
-      )}
-      <div className="video-overlay"><Badge variant={isLive ? 'red' : 'purple'} dot>{isLive ? 'LIVE' : 'VOD'}</Badge><span>STREAM 0{isLive ? '1' : '2'}</span></div>
-      {!url && <div className="video-corner-mark">NO SIGNAL</div>}
-    </div>
-  );
+function ChartCard({ title, description, data, lines, unit, area = false, legend = false, height = 220, className = '', timeDomain }) {
+  return <Card className={`chart-card ${className}`}><div className="chart-card-head"><div><h3>{title}</h3>{description && <p>{description}</p>}</div><span className="chart-unit">{unit}</span></div><TrendChart data={data} lines={lines} unit={unit} area={area} height={height} legend={legend} timeDomain={timeDomain} /></Card>;
 }
 
 function StreamRow({ mode, latest, onOpen }) {
@@ -316,7 +232,7 @@ function DashboardPage({ live, vod, merged, onNavigate, now }) {
   );
 }
 
-function MonitorPage({ mode, history, videoUrl, onNavigate, scenario, onMetrics }) {
+function MonitorPage({ mode, history, videoUrl, onNavigate, scenario }) {
   const live = mode === 'live';
   const latest = safeLatest(history);
   const color = live ? COLORS.live : COLORS.vod;
@@ -324,26 +240,125 @@ function MonitorPage({ mode, history, videoUrl, onNavigate, scenario, onMetrics 
     <>
       <div className="page-title-row"><div><div className="eyebrow"><span /> STREAMING / {live ? 'LIVE' : 'VOD'}</div><h1>{live ? 'LIVE 모니터링' : 'VOD 모니터링'}</h1><p>{live ? '실시간 송수신 환경의 지연과 패킷 손실을 관찰합니다.' : 'VOD 재생 상태와 비트레이트, 버퍼를 살펴봅니다.'}</p></div><Badge variant={live ? 'red' : 'purple'} dot>{live ? 'LIVE CHANNEL' : 'VOD CHANNEL'}</Badge></div>
       <div className="monitor-layout">
-        <Card className="player-card"><div className="card-heading"><div><h3>{live ? 'Live Stream 01' : 'VOD Player 01'}</h3><p>{videoUrl ? 'HLS / 미디어 스트림 재생 중' : '영상 플레이어 · 소스 연결 대기'}</p></div><span className="card-heading-icon"><Video size={18} /></span></div><VideoPanel mode={mode} url={videoUrl} onConnect={() => onNavigate('settings')} onMetrics={onMetrics} /><div className="player-footer"><span><span className={`dot ${videoUrl ? 'dot-green' : 'dot-yellow'}`} />{videoUrl ? '플레이어 API 실측 연동 중' : '영상 소스 미연결'}</span><span>전송 지표: 실시간</span></div></Card>
-        <div className="monitor-sidebar"><Card className="stream-health"><div className="health-title"><span>STREAM STATUS</span><Badge variant="neutral">실시간 수신</Badge></div><strong>네트워크 지표</strong><p>네트워크 지표가 자동 갱신되고 있습니다.</p><div className="health-meta"><span>선택 시나리오</span><b>{SCENARIOS.find((item) => item.id === scenario)?.title}</b></div></Card><div className="monitor-metrics"><MetricCard compact label="Latency" value={format(latest.latency)} unit="ms" icon={Clock3} accent="cyan" /><MetricCard compact label="Packet Loss" value={format(latest.packetLoss, 2)} unit="%" icon={Signal} accent="yellow" /><MetricCard compact label="Bitrate" value={format(latest.bitrate)} unit="kbps" icon={Gauge} accent="purple" /><MetricCard compact label="Buffer Level" value={format(latest.buffer, 1)} unit="sec" icon={Activity} accent="green" /></div></div>
+        <Card className="player-card"><div className="card-heading"><div><h3>{live ? 'Live Stream 01' : 'VOD Player 01'}</h3><p>{live ? 'MediaMTX · WebRTC' : videoUrl ? 'HLS / 미디어 스트림' : '영상 플레이어 · 소스 연결 대기'}</p></div><span className="card-heading-icon"><Video size={18} /></span></div>{live ? <LivePlayer url={videoUrl} onConnect={() => onNavigate('settings')} /> : <VodPlayer url={videoUrl} onConnect={() => onNavigate('settings')} />}<div className="player-footer"><span><span className={`dot ${videoUrl ? 'dot-green' : 'dot-yellow'}`} />{live ? '영상 수신과 서버 지표는 아래에서 각각 확인할 수 있습니다.' : videoUrl ? '플레이어 지표는 영상 아래에 표시됩니다.' : '영상 소스 미연결'}</span><span>전송 지표: 실시간</span></div></Card>
+        <div className="monitor-sidebar"><Card className="stream-health"><div className="health-title"><span>STREAM STATUS</span><Badge variant="neutral">실시간 수신</Badge></div><strong>외부 네트워크 지표</strong><p>{live ? 'FastAPI 외부 프로브 기반 · 모드 및 시나리오 보정 적용. 연결 실패 시 데모 데이터로 전환됩니다.' : 'FastAPI 외부 프로브 및 추정값입니다. 연결 실패 시 데모 값이 표시됩니다.'}</p><div className="health-meta"><span>선택 시나리오</span><b>{SCENARIOS.find((item) => item.id === scenario)?.title}</b></div></Card><div className="monitor-metrics"><MetricCard compact label="Latency" value={format(latest.latency)} unit="ms" icon={Clock3} accent="cyan" /><MetricCard compact label="Packet Loss" value={format(latest.packetLoss, 2)} unit="%" icon={Signal} accent="yellow" /><MetricCard compact label={live ? "Bitrate" : "프로브 처리량"} value={format(latest.bitrate)} unit="kbps" icon={Gauge} accent="purple" /><MetricCard compact label={live ? "Buffer Level" : "추정 버퍼"} value={format(latest.buffer, 1)} unit="sec" icon={Activity} accent="green" /></div></div>
       </div>
-      <div className="two-charts"><ChartCard title="Latency Trend" description="시간별 지연 변화" data={history} lines={[{ key: 'latency', name: 'Latency', color }]} unit="ms" area height={214} /><ChartCard title="Packet Loss Trend" description="시간별 패킷 손실률" data={history} lines={[{ key: 'packetLoss', name: 'Packet Loss', color: COLORS.warning }]} unit="%" area height={214} /></div>
+      <div className="two-charts"><ChartCard title="Latency Trend" description={live ? '서버 프로브 지연 추이 · 데모 전환 가능' : '시간별 지연 변화'} data={history} lines={[{ key: 'latency', name: 'Latency', color }]} unit="ms" area height={214} /><ChartCard title="Packet Loss Trend" description={live ? '서버 프로브 실패율 기반 · 데모 전환 가능' : '시간별 패킷 손실률'} data={history} lines={[{ key: 'packetLoss', name: 'Packet Loss', color: COLORS.warning }]} unit="%" area height={214} /></div>
       <div className="insight-note"><Info size={17} /><span>LIVE(WebRTC) 및 VOD(HLS) 스트리밍 환경의 실시간 네트워크 품질 지표를 수집·분석합니다.</span></div>
     </>
   );
 }
 
-function ComparePage({ live, vod, merged, urls, onNavigate, onMetrics }) {
-  const l = safeLatest(live);
-  const v = safeLatest(vod);
-  const rows = [
-    ['Latency', `${format(l.latency)} ms`, `${format(v.latency)} ms`],
-    ['Packet Loss', `${format(l.packetLoss, 2)} %`, `${format(v.packetLoss, 2)} %`],
-    ['Bitrate', `${format(l.bitrate)} kbps`, `${format(v.bitrate)} kbps`],
-    ['Buffer Level', `${format(l.buffer, 1)} sec`, `${format(v.buffer, 1)} sec`],
-    ['Jitter', `${format(l.jitter, 1)} ms`, `${format(v.jitter, 1)} ms`],
+const PLAYER_ROWS = [
+  ['영상 RTP 패킷 손실률', 'packetLoss', null, '%'],
+  ['영상 수신 비트레이트', 'bitrate', null, 'kbps'],
+  ['RTP 지터', 'jitter', null, 'ms'],
+  ['버퍼 잔여량', null, 'buffer', 's'],
+  ['선택 화질 명목 비트레이트', null, 'bitrate', 'kbps'],
+  ['재생 중 버퍼링 횟수', null, 'bufferingCount', '회'],
+];
+
+function displayMeasurement(value, unit) {
+  return Number.isFinite(value) ? `${Number(value.toFixed(2)).toLocaleString('ko-KR')} ${unit}` : 'N/A';
+}
+
+function ComparePage({ live, vod, urls, onNavigate, recordings, onRecording }) {
+  const [players, setPlayers] = useState({ live: null, vod: null });
+  const [trends, setTrends] = useState({ live: [], vod: [] });
+  const [condition, setCondition] = useState('normal');
+  const [recordingStart, setRecordingStart] = useState(null);
+  const recording = useRef(null);
+
+  const receive = useCallback((mode, sample) => {
+    setPlayers((previous) => ({ ...previous, [mode]: sample }));
+    const active = recording.current;
+    if (active && sample && sample.timestamp >= active.start) active.samples.push({ ...sample, mode });
+    setTrends((previous) => ({
+      ...previous,
+      [mode]: sample ? [...previous[mode].slice(-71), sample] : [],
+    }));
+  }, []);
+  const onLiveMetrics = useCallback((sample) => receive('live', sample), [receive]);
+  const onVodMetrics = useCallback((sample) => receive('vod', sample), [receive]);
+
+  function start() {
+    const start = Date.now();
+    recording.current = { condition, start, samples: [] };
+    setRecordingStart(start);
+  }
+
+  function stop() {
+    const active = recording.current;
+    if (!active) return;
+    recording.current = null;
+    onRecording({ ...active, end: Date.now() });
+    setRecordingStart(null);
+  }
+
+  const external = alignByTimestamp(
+    live.filter((sample) => sample.source === 'external-probe'),
+    vod.filter((sample) => sample.source === 'external-probe'),
+    (sample, mode) => ({ [`${mode}Latency`]: sample.latency }),
+  );
+  const playerTime = alignByTimestamp(trends.live, trends.vod, () => ({}));
+  const domain = playerTime.length ? [playerTime[0].timestamp, Math.max(playerTime.at(-1).timestamp, playerTime[0].timestamp + 1000)] : undefined;
+  const sessions = [
+    ['normal', '정상 환경', recordings.normal],
+    ['degraded', '품질 저하 환경', recordings.degraded],
   ];
-  return <><div className="page-title-row"><div><div className="eyebrow"><span /> STREAMING / COMPARISON</div><h1>LIVE / VOD 비교</h1><p>두 스트리밍 모드를 같은 화면에서 관찰하고 지표 차이를 확인하세요.</p></div><Badge variant="cyan"><GitCompareArrows size={13} /> SIDE BY SIDE</Badge></div><div className="compare-video-grid"><Card className="compare-video-card"><div className="card-heading"><div><h3><span className="title-dot cyan" />LIVE Streaming</h3><p>실시간 스트리밍</p></div><Badge variant="red" dot>LIVE</Badge></div><VideoPanel mode="live" url={urls.live} small onConnect={() => onNavigate('settings')} onMetrics={onMetrics} /><div className="compare-summary"><span>Latency <b>{format(l.latency)} ms</b></span><span>Packet Loss <b>{format(l.packetLoss, 2)}%</b></span></div></Card><Card className="compare-video-card"><div className="card-heading"><div><h3><span className="title-dot purple" />VOD Streaming</h3><p>주문형 영상</p></div><Badge variant="purple">VOD</Badge></div><VideoPanel mode="vod" url={urls.vod} small onConnect={() => onNavigate('settings')} onMetrics={onMetrics} /><div className="compare-summary"><span>Latency <b>{format(v.latency)} ms</b></span><span>Packet Loss <b>{format(v.packetLoss, 2)}%</b></span></div></Card></div><div className="compare-detail-grid"><ChartCard title="지연 시간 비교" description="같은 시간축에서 두 모드를 비교" data={merged} lines={[{ key: 'liveLatency', name: 'LIVE', color: COLORS.live }, { key: 'vodLatency', name: 'VOD', color: COLORS.vod }]} unit="ms" legend height={264} /><Card className="compare-table-card"><div className="card-heading"><div><h3>지표별 비교</h3><p>최신 수집 지표 기준</p></div><span className="chart-unit">5 METRICS</span></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Metric</th><th>LIVE</th><th>VOD</th></tr></thead><tbody>{rows.map(([metric, lv, vv]) => <tr key={metric}><td>{metric}</td><td>{lv}</td><td>{vv}</td></tr>)}</tbody></table></div></Card></div><div className="insight-note"><Info size={17} /><span>동일한 시간축과 측정 기준(위치·방식·단위)을 바탕으로 LIVE와 VOD 간의 전송 성능을 비교합니다.</span></div></>;
+  const summaries = sessions.map(([, , session]) => session ? summarizeRecording(session) : {});
+  const summaryKeys = ['packetLoss', 'liveBitrate', 'jitter', 'buffer', 'vodBitrate', 'bufferingCount'];
+
+  return (
+    <>
+      <div className="page-title-row">
+        <div><h1>LIVE / VOD 비교</h1><p>같은 시간대의 실제 플레이어 측정과 외부 네트워크 추이를 확인합니다.</p></div>
+        <Badge variant="cyan"><GitCompareArrows size={13} /> 실제 플레이어</Badge>
+      </div>
+      <div className="compare-video-grid">
+        <Card className="compare-video-card"><div className="card-heading"><h3>LIVE · WebRTC</h3></div><LivePlayer url={urls.live} small onConnect={() => onNavigate('settings')} onMetrics={onLiveMetrics} /></Card>
+        <Card className="compare-video-card"><div className="card-heading"><h3>VOD · HLS</h3></div><VodPlayer url={urls.vod} small onConnect={() => onNavigate('settings')} onMetrics={onVodMetrics} /></Card>
+      </div>
+      <Card className="comparison-section">
+        <div className="card-heading"><div><h3>실제 플레이어 지표</h3><p>버퍼링 횟수는 초기 로딩과 탐색을 제외한 현재 VOD 재생 세션의 값입니다.</p></div></div>
+        <div className="table-wrap"><table className="data-table">
+          <thead><tr><th>지표</th><th>LIVE</th><th>VOD</th></tr></thead>
+          <tbody>{PLAYER_ROWS.map(([label, liveKey, vodKey, unit]) => (
+            <tr key={label}><th>{label}</th><td>{displayMeasurement(players.live?.[liveKey], unit)}</td><td>{displayMeasurement(players.vod?.[vodKey], unit)}</td></tr>
+          ))}</tbody>
+        </table></div>
+      </Card>
+      <div className="two-charts comparison-section">
+        <ChartCard title="LIVE 영상 수신 비트레이트" description="WebRTC 수신 · kbps" data={alignByTimestamp(trends.live, [], (sample) => ({ bitrate: sample.bitrate }))} lines={[{ key: 'bitrate', name: '수신', color: COLORS.live }]} unit="kbps" timeDomain={domain} />
+        <ChartCard title="VOD 버퍼 잔여량" description="브라우저 재생 버퍼 · 초" data={alignByTimestamp([], trends.vod, (sample) => ({ buffer: sample.buffer }))} lines={[{ key: 'buffer', name: '버퍼 잔여량', color: COLORS.vod }]} unit="s" timeDomain={domain} />
+      </div>
+      <div className="comparison-section">
+        <ChartCard title="FastAPI 외부 프로브 지연" description="서버 프로브 기반 · 모드 및 시나리오 보정 포함" data={external} lines={[{ key: 'liveLatency', name: 'LIVE 모델', color: COLORS.live }, { key: 'vodLatency', name: 'VOD 모델', color: COLORS.vod }]} legend timeDomain={external.length ? ['dataMin', 'dataMax'] : undefined} />
+        {!external.length && <p>외부 프로브 SSE 샘플 대기 중입니다. 로컬 데모 샘플은 이 그래프에서 제외됩니다.</p>}
+        <p className="insight-note">시뮬레이션 결과는 <button type="button" className="video-source-btn" onClick={() => onNavigate('tests')}>네트워크 실험</button>에서 확인할 수 있습니다.</p>
+      </div>
+      <Card className="settings-card comparison-section">
+        <div className="card-heading"><div><h3>측정 세션</h3><p>환경 라벨은 사용자가 지정합니다. 네트워크 제한 적용 여부는 검증되지 않았습니다.</p></div></div>
+        <div className="experiment-actions comparison-controls">
+          <label>환경 <select value={condition} disabled={recordingStart !== null} onChange={(event) => setCondition(event.target.value)}><option value="normal">정상 환경</option><option value="degraded">품질 저하 환경</option></select></label>
+          <button type="button" className="primary-button" disabled={recordingStart !== null} onClick={start}>측정 시작</button>
+          <button type="button" className="video-source-btn" disabled={recordingStart === null} onClick={stop}>측정 종료</button>
+          <span role="status">{recordingStart !== null ? `기록 중 · ${clock(recordingStart)} · 화면을 나가기 전에 측정을 종료하세요.` : '측정 대기 중'}</span>
+        </div>
+        <div className="table-wrap comparison-section"><table className="data-table">
+          <thead><tr><th>측정 지표</th>{sessions.map(([key, name]) => <th key={key}>{name}</th>)}</tr></thead>
+          <tbody>
+            <tr><th>기록 구간</th>{sessions.map(([key, , session]) => <td key={key}>{session ? `${clock(session.start)}–${clock(session.end)} · ${session.samples.length}개` : 'N/A'}</td>)}</tr>
+            {PLAYER_ROWS.map(([label, , , unit], index) => (
+              <tr key={label}><th>{label}{index < 5 ? ' 평균' : ' 합계'}</th>{summaries.map((summary, column) => <td key={sessions[column][0]}>{displayMeasurement(summary[summaryKeys[index]], unit)}</td>)}</tr>
+            ))}
+            <tr><th>실제 플레이어 CSV</th>{sessions.map(([key, name, session]) => <td key={key}>{session ? <button className="video-source-btn" onClick={() => saveCsv(recordingCsv(session), `stream-metrics-${key}-${session.start}.csv`)}>{name} CSV</button> : 'N/A'}</td>)}</tr>
+          </tbody>
+        </table></div>
+        <p>환경별 최근 완료 세션을 페이지 이동 중 유지합니다. 새로고침 전에 CSV를 내려받으세요.</p>
+      </Card>
+    </>
+  );
 }
 
 function StatisticsPage({ live, vod, merged }) {
@@ -361,8 +376,119 @@ function StatisticsPage({ live, vod, merged }) {
   return <><div className="page-title-row"><div><div className="eyebrow"><span /> ANALYTICS / STATISTICS</div><h1>통계 분석</h1><p>수집된 구간의 추세와 5초 이동 평균 통계를 정리했습니다.</p></div><Badge variant="cyan"><BarChart3 size={14} /> {live.length} SAMPLES</Badge></div><div className="metric-grid"><MetricCard label="LIVE 평균 지연" value={format(latency.average, 1)} unit="ms" icon={Clock3} accent="cyan" helper="최근 샘플 산술평균" /><MetricCard label="LIVE 5초 이동평균" value={format(calcMovingAverage(live, 'latency', 5), 1)} unit="ms" icon={ArrowUpRight} accent="green" helper="측정 오차 보정 추세" /><MetricCard label="LIVE 평균 손실" value={format(loss.average, 2)} unit="%" icon={Signal} accent="purple" helper="최근 샘플 산술평균" /><MetricCard label="VOD 평균 비트레이트" value={format(bitrate.average)} unit="kbps" icon={Gauge} accent="yellow" helper="최근 샘플 산술평균" /></div><div className="two-charts"><ChartCard title="Latency Distribution & Moving Average" description="실시간 지연 및 5초 이동 평균 추이" data={mergedWithMA} lines={[{ key: 'liveLatency', name: 'LIVE (실시간)', color: COLORS.live }, { key: 'liveLatencyMA', name: 'LIVE (5초 이동평균)', color: COLORS.good }, { key: 'vodLatency', name: 'VOD', color: COLORS.vod }]} unit="ms" legend height={252} /><ChartCard title="Packet Loss Over Time" description="LIVE와 VOD의 시간별 패킷 손실률 비교" data={mergedWithMA} lines={[{ key: 'liveLoss', name: 'LIVE', color: COLORS.warning }, { key: 'vodLoss', name: 'VOD', color: COLORS.vod }]} unit="%" legend height={252} /></div><Card className="stats-summary"><div className="card-heading"><div><h3>측정값 요약</h3><p>현재 모니터링 구간 기준 (5초 이동 평균 포함)</p></div><Badge variant="neutral">MOVING AVERAGE</Badge></div><div className="table-wrap"><table className="data-table"><thead><tr><th>지표</th><th>전체 평균</th><th>5초 이동평균</th><th>최솟값</th><th>최댓값</th><th>P95</th></tr></thead><tbody>{summary.map(([label, unit, s, ma]) => <tr key={label}><td>{label}</td><td>{format(s.average, 1)} {unit}</td><td><b>{format(ma, 1)} {unit}</b></td><td>{format(s.min, 1)} {unit}</td><td>{format(s.max, 1)} {unit}</td><td>{format(s.p95, 1)} {unit}</td></tr>)}</tbody></table></div></Card></>;
 }
 
-function TestsPage({ scenario, onScenarioChange, live, vod }) {
-  return <><div className="page-title-row"><div><div className="eyebrow"><span /> ANALYTICS / NETWORK TESTS</div><h1>네트워크 실험</h1><p>네트워크 조건을 선택해 스트리밍 지표 변화를 테스트하세요.</p></div><Badge variant="cyan"><FlaskConical size={14} /> SCENARIO TEST</Badge></div><div className="test-banner"><div className="test-banner-icon"><FlaskConical size={24} /></div><div><strong>네트워크 부하 시나리오 제어</strong><p>선택한 네트워크 조건(일반 환경, 대역폭 제한, 패킷 손실 증가)을 실시간 측정 엔진에 즉시 반영합니다.</p></div></div><SectionTitle title="테스트 시나리오" subtitle="하나를 선택하면 전체 모니터링 차트에 즉시 반영됩니다." /><div className="scenario-grid">{SCENARIOS.map((item) => <button key={item.id} className={`scenario-card ${scenario === item.id ? 'scenario-selected' : ''}`} onClick={() => onScenarioChange(item.id)}><span className="scenario-symbol">{item.id === 'normal' ? <Wifi size={23} /> : item.id === 'bandwidth' ? <Gauge size={23} /> : <AlertTriangle size={23} />}</span><strong>{item.title}</strong><span>{item.caption}</span><div className="scenario-choice">{scenario === item.id ? <><CheckCircle2 size={16} /> 적용 중</> : <>시나리오 적용 <ArrowRight size={15} /></>}</div></button>)}</div><SectionTitle title="현재 측정 결과" subtitle="선택한 시나리오의 실시간 수집 지표" /><div className="metric-grid"><MetricCard label="LIVE Latency" value={format(safeLatest(live).latency)} unit="ms" icon={Clock3} accent="cyan" /><MetricCard label="LIVE Packet Loss" value={format(safeLatest(live).packetLoss, 2)} unit="%" icon={Signal} accent="yellow" /><MetricCard label="VOD Bitrate" value={format(safeLatest(vod).bitrate)} unit="kbps" icon={Gauge} accent="purple" /><MetricCard label="VOD Buffer" value={format(safeLatest(vod).buffer, 1)} unit="sec" icon={Activity} accent="green" /></div><div className="insight-note"><Info size={17} /><span>시나리오 변경 시 백엔드 수집기의 부하 계수가 동기화되어 모든 지표와 차트에 반영됩니다.</span></div></>;
+const EXPERIMENT_PRESETS = {
+  normal: DEFAULT_CONDITIONS,
+  bandwidth: { bandwidth: '1500', unit: 'kbps', delay: '30', loss: '0' },
+  loss: { bandwidth: '5000', unit: 'kbps', delay: '50', loss: '5' },
+};
+
+const formatExperimentKbps = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 3 });
+
+function TestsPage({ urls, onNavigate }) {
+  const [fields, setFields] = useState(DEFAULT_CONDITIONS);
+  const [conditions, setConditions] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!running) return undefined;
+    let index = 1;
+    const timer = window.setInterval(() => {
+      const sample = simulateNetworkSample(conditions, index++);
+      setHistory((previous) => [...previous.slice(-71), sample]);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [conditions, running]);
+
+  function start(event) {
+    event.preventDefault();
+    try {
+      const next = validateConditions(fields);
+      setConditions(next);
+      setHistory([simulateNetworkSample(next, 0)]);
+      setError('');
+      setRunning(true);
+    } catch (validationError) {
+      setError(validationError.message);
+    }
+  }
+
+  function reset() {
+    setRunning(false);
+    setFields(DEFAULT_CONDITIONS);
+    setConditions(null);
+    setHistory([]);
+    setError('');
+  }
+
+  function updateField(event) {
+    const { name, value } = event.target;
+    setFields((previous) => ({ ...previous, [name]: value }));
+    setError('');
+  }
+
+  const latest = history.at(-1);
+  return (
+    <>
+      <div className="page-title-row">
+        <div><h1>네트워크 실험</h1><p>가상 조건에서 계산한 결과와 현재 영상의 실제 플레이어 지표를 관찰합니다.</p></div>
+        <Badge variant="cyan"><FlaskConical size={14} /> 시뮬레이션</Badge>
+      </div>
+      <div className="test-banner">
+        <div className="test-banner-icon"><FlaskConical size={24} /></div>
+        <div><strong>실제 네트워크 제한 미적용</strong><p>입력 조건은 이 화면의 시뮬레이션 계산에만 적용됩니다. 두 플레이어는 현재 네트워크에서 재생됩니다.</p></div>
+      </div>
+      <Card className="settings-card experiment-form">
+        <form noValidate onSubmit={start}>
+          <fieldset disabled={running}>
+            <legend>시뮬레이션 조건</legend>
+            <div className="experiment-actions">
+              {SCENARIOS.map((item) => (
+                <button type="button" className="video-source-btn" key={item.id} onClick={() => {
+                  setFields(EXPERIMENT_PRESETS[item.id]);
+                  setError('');
+                }}>{item.title}</button>
+              ))}
+            </div>
+            <div className="experiment-fields">
+              <label>대역폭 제한<input name="bandwidth" type="number" step="any" value={fields.bandwidth} onChange={updateField} /></label>
+              <label>대역폭 단위<select name="unit" value={fields.unit} onChange={updateField}><option>kbps</option><option>Mbps</option></select></label>
+              <label>추가 지연 (ms)<input name="delay" type="number" step="any" min="0" max="10000" value={fields.delay} onChange={updateField} /></label>
+              <label>패킷 손실률 (%)<input name="loss" type="number" step="any" min="0" max="100" value={fields.loss} onChange={updateField} /></label>
+            </div>
+          </fieldset>
+          {error && <p className="experiment-error" role="alert">{error}</p>}
+          <div className="experiment-actions">
+            <button className="primary-button" disabled={running}>실험 시작</button>
+            <button type="button" className="video-source-btn" disabled={!running} onClick={() => setRunning(false)}>중단</button>
+            <button type="button" className="video-source-btn" onClick={reset}>초기화</button>
+            <span role="status">{running ? '시뮬레이션 실행 중' : latest ? '시뮬레이션 중단됨' : '시뮬레이션 대기 중'}</span>
+          </div>
+        </form>
+      </Card>
+      <SectionTitle title="시뮬레이션 결과" subtitle="데모 기준값에 대역폭 상한, 추가 지연, 추가 손실 확률을 적용한 계산값입니다." />
+      {latest && (
+        <div className="compare-detail-grid">
+          <ChartCard title="예상 지연 추이" description="시뮬레이션 · 최근 72개 샘플" data={history} lines={[{ key: 'liveLatency', name: 'LIVE 모델', color: COLORS.live }, { key: 'vodLatency', name: 'VOD 모델', color: COLORS.vod }]} unit="ms" legend height={242} />
+          <Card>
+            <div className="card-heading"><div><h3>최근 시뮬레이션 값</h3><p>{formatExperimentKbps.format(conditions.bandwidthKbps)} kbps · +{conditions.delayMs} ms · 추가 손실 {conditions.lossPercent}%</p></div></div>
+            <div className="table-wrap"><table className="data-table">
+              <thead><tr><th>모델</th><th>지연</th><th>손실률</th><th>처리량</th></tr></thead>
+              <tbody>{['live', 'vod'].map((mode) => (
+                <tr key={mode}><th>{mode.toUpperCase()}</th><td>{format(latest[mode].latency, 1)} ms</td><td>{format(latest[mode].packetLoss, 2)}%</td><td>{formatExperimentKbps.format(latest[mode].bitrate)} kbps</td></tr>
+              ))}</tbody>
+            </table></div>
+          </Card>
+        </div>
+      )}
+      <SectionTitle title="실제 플레이어 지표" subtitle="현재 연결에서 받은 WebRTC·HLS 지표입니다. HLS 명목 비트레이트는 매니페스트에 선언된 값입니다." />
+      <div className="compare-video-grid">
+        <Card className="compare-video-card"><div className="card-heading"><div><h3>LIVE · WebRTC</h3></div></div><LivePlayer url={urls.live} onConnect={() => onNavigate('settings')} /></Card>
+        <Card className="compare-video-card"><div className="card-heading"><div><h3>VOD · HLS</h3></div></div><VodPlayer url={urls.vod} onConnect={() => onNavigate('settings')} /></Card>
+      </div>
+    </>
+  );
 }
 
 function downloadCsv(live, vod) {
@@ -372,10 +498,14 @@ function downloadCsv(live, vod) {
     ...vod.map((s) => [new Date(s.timestamp).toISOString(), 'VOD', s.latency, s.packetLoss, s.bitrate, s.buffer, s.jitter]),
   ];
   const csv = '\uFEFF' + [header, ...rows.map((row) => row.join(','))].join('\r\n');
+  saveCsv(csv, `stream-metrics-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+function saveCsv(csv, filename) {
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = `stream-metrics-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -386,7 +516,7 @@ function ReportsPage({ live, vod }) {
 } 
 
 function SettingsPage({ urls, onUrlChange, refreshInterval, onRefreshChange }) {
-  return <><div className="page-title-row"><div><div className="eyebrow"><span /> SYSTEM / SETTINGS</div><h1>대시보드 설정</h1><p>영상 소스와 모니터링 데이터 갱신 주기를 설정할 수 있습니다.</p></div><Badge variant="neutral"><Settings size={14} /> LOCAL SETTINGS</Badge></div><div className="settings-grid"><Card className="settings-card"><div className="card-heading"><div><h3>영상 소스</h3><p>HLS(.m3u8) 또는 브라우저에서 재생 가능한 영상 URL을 입력하세요.</p></div><Video size={20} /></div><label className="field-label" htmlFor="live-url">LIVE 영상 URL</label><input id="live-url" type="url" value={urls.live} onChange={(e) => onUrlChange('live', e.target.value)} placeholder="https://.../live.m3u8" /><label className="field-label" htmlFor="vod-url">VOD 영상 URL</label><input id="vod-url" type="url" value={urls.vod} onChange={(e) => onUrlChange('vod', e.target.value)} placeholder="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" /><div className="settings-note"><Info size={16} /><span>HLS(.m3u8) 스트림을 입력하면 적응형 비트레이트(ABR) 재생 및 실제 버퍼 잔여량이 자동 측정됩니다.</span></div></Card><Card className="settings-card"><div className="card-heading"><div><h3>표시 설정</h3><p>모니터링 차트의 업데이트 간격을 선택하세요.</p></div><SlidersHorizontal size={20} /></div><label className="field-label">데이터 갱신 간격</label><div className="segmented-row">{[1000, 2000, 5000].map((ms) => <button key={ms} className={refreshInterval === ms ? 'selected' : ''} onClick={() => onRefreshChange(ms)}>{ms / 1000}초</button>)}</div><div className="settings-status"><div><span className="dot dot-green" /><strong>프론트엔드</strong></div><Badge variant="green">실행 중</Badge></div><div className="settings-status"><div><span className="dot dot-green" /><strong>FastAPI 데이터 연동</strong></div><Badge variant="green">연동됨</Badge></div><div className="settings-status"><div><span className={`dot ${urls.live || urls.vod ? 'dot-green' : 'dot-yellow'}`} /><strong>LIVE / VOD 소스</strong></div><Badge variant={urls.live || urls.vod ? 'green' : 'yellow'}>{urls.live || urls.vod ? '연결됨' : '설정 필요'}</Badge></div></Card></div><div className="insight-note"><Info size={17} /><span>변경된 영상 소스 URL과 데이터 갱신 간격은 현재 모니터링 세션에 즉시 반영됩니다.</span></div></>;
+  return <><div className="page-title-row"><div><div className="eyebrow"><span /> SYSTEM / SETTINGS</div><h1>대시보드 설정</h1><p>영상 소스와 모니터링 데이터 갱신 주기를 설정할 수 있습니다.</p></div><Badge variant="neutral"><Settings size={14} /> LOCAL SETTINGS</Badge></div><div className="settings-grid"><Card className="settings-card"><div className="card-heading"><div><h3>영상 소스</h3><p>LIVE는 MediaMTX 주소, VOD는 HLS(.m3u8) 또는 브라우저에서 재생 가능한 영상 URL을 입력하세요.</p></div><Video size={20} /></div><label className="field-label" htmlFor="live-url">LIVE 영상 URL</label><input id="live-url" type="url" value={urls.live} onChange={(e) => onUrlChange('live', e.target.value)} placeholder="http://localhost:8889/mystream" /><label className="field-label" htmlFor="vod-url">VOD 영상 URL</label><input id="vod-url" type="url" value={urls.vod} onChange={(e) => onUrlChange('vod', e.target.value)} placeholder="http://localhost:5173/vod/stage2-demo/master.m3u8" /><div className="settings-note"><Info size={16} /><span>HLS(.m3u8) 스트림을 입력하면 적응형 비트레이트(ABR) 재생 및 실제 버퍼 잔여량이 자동 측정됩니다.</span></div></Card><Card className="settings-card"><div className="card-heading"><div><h3>표시 설정</h3><p>모니터링 차트의 업데이트 간격을 선택하세요.</p></div><SlidersHorizontal size={20} /></div><label className="field-label">데이터 갱신 간격</label><div className="segmented-row">{[1000, 2000, 5000].map((ms) => <button key={ms} className={refreshInterval === ms ? 'selected' : ''} onClick={() => onRefreshChange(ms)}>{ms / 1000}초</button>)}</div><div className="settings-status"><div><span className="dot dot-green" /><strong>프론트엔드</strong></div><Badge variant="green">실행 중</Badge></div><div className="settings-status"><div><span className="dot dot-green" /><strong>FastAPI 데이터 연동</strong></div><Badge variant="green">연동됨</Badge></div><div className="settings-status"><div><span className={`dot ${urls.live || urls.vod ? 'dot-green' : 'dot-yellow'}`} /><strong>LIVE / VOD 소스</strong></div><Badge variant={urls.live || urls.vod ? 'green' : 'yellow'}>{urls.live || urls.vod ? '연결됨' : '설정 필요'}</Badge></div></Card></div><div className="insight-note"><Info size={17} /><span>변경된 영상 소스 URL과 데이터 갱신 간격은 현재 모니터링 세션에 즉시 반영됩니다.</span></div></>;
 }
 
 export default function App() {
@@ -394,46 +524,26 @@ export default function App() {
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [scenario, setScenario] = useState('normal');
   const [refreshInterval, setRefreshInterval] = useState(1000);
-  const [videoUrls, setVideoUrls] = useState({ live: '', vod: '' });
+  const [videoUrls, setVideoUrls] = useState({ live: 'http://localhost:8889/mystream', vod: '' });
+  const [recordings, setRecordings] = useState({});
   const [live, setLive] = useState([]);
   const [vod, setVod] = useState([]);
   const [now, setNow] = useState(() => Date.now());
   const tick = useRef(72);
-  const scenarioRef = useRef('normal');
-  const isFallbackRef = useRef(false);
-  const playerMetricsRef = useRef({ live: null, vod: null });
-
-  const handlePlayerMetrics = useCallback((mode, metrics) => {
-    playerMetricsRef.current[mode] = metrics;
-  }, []);
-
   useEffect(() => {
     let liveEs = null;
     let vodEs = null;
     let fallbackTimer = null;
 
-    const applyPlayerOverride = (mode, sample) => {
-      const pm = playerMetricsRef.current[mode];
-      if (pm && Date.now() - pm.updatedAt < 3000) {
-        return {
-          ...sample,
-          buffer: pm.buffer,
-          bitrate: pm.bitrate ?? sample.bitrate,
-        };
-      }
-      return sample;
-    };
-
     const startFallback = () => {
       if (fallbackTimer) return;
-      isFallbackRef.current = true;
-      setLive((prev) => (prev.length ? prev : initialHistory('live', scenarioRef.current)));
-      setVod((prev) => (prev.length ? prev : initialHistory('vod', scenarioRef.current)));
+      setLive((prev) => (prev.length ? prev : initialHistory('live', 'normal')));
+      setVod((prev) => (prev.length ? prev : initialHistory('vod', 'normal')));
       fallbackTimer = window.setInterval(() => {
         tick.current += 1;
         const time = Date.now();
-        const liveSample = applyPlayerOverride('live', makeSample('live', tick.current, scenarioRef.current, time));
-        const vodSample = applyPlayerOverride('vod', makeSample('vod', tick.current, scenarioRef.current, time));
+        const liveSample = makeSample('live', tick.current, 'normal', time);
+        const vodSample = makeSample('vod', tick.current, 'normal', time);
         setLive((history) => [...history.slice(-71), liveSample]);
         setVod((history) => [...history.slice(-71), vodSample]);
         setNow(time);
@@ -444,15 +554,15 @@ export default function App() {
       liveEs = new EventSource('http://localhost:8000/api/metrics/stream?mode=live');
       vodEs = new EventSource('http://localhost:8000/api/metrics/stream?mode=vod');
 
+      liveEs.addEventListener('hello', (event) => setScenario(JSON.parse(event.data).scenario));
       liveEs.onmessage = (event) => {
-        isFallbackRef.current = false;
-        const sample = applyPlayerOverride('live', JSON.parse(event.data));
+        const sample = { ...JSON.parse(event.data), source: 'external-probe' };
         setLive((prev) => [...prev.slice(-71), sample]);
         setNow(sample.timestamp);
       };
 
       vodEs.onmessage = (event) => {
-        const sample = applyPlayerOverride('vod', JSON.parse(event.data));
+        const sample = { ...JSON.parse(event.data), source: 'external-probe' };
         setVod((prev) => [...prev.slice(-71), sample]);
       };
 
@@ -472,31 +582,15 @@ export default function App() {
     };
   }, [refreshInterval]);
 
-  const handleScenarioChange = (next) => {
-    scenarioRef.current = next;
-    setScenario(next);
-    tick.current = 72;
-
-    fetch('http://localhost:8000/api/scenarios', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scenario: next }),
-    }).catch(() => {});
-
-    if (isFallbackRef.current) {
-      setLive(initialHistory('live', next));
-      setVod(initialHistory('vod', next));
-    }
-  };
   const merged = getMergedHistory(live, vod);
 
   let content;
   switch (page) {
-    case 'live': content = <MonitorPage mode="live" history={live} videoUrl={videoUrls.live} onNavigate={setPage} scenario={scenario} onMetrics={handlePlayerMetrics} />; break;
-    case 'vod': content = <MonitorPage mode="vod" history={vod} videoUrl={videoUrls.vod} onNavigate={setPage} scenario={scenario} onMetrics={handlePlayerMetrics} />; break;
-    case 'compare': content = <ComparePage live={live} vod={vod} merged={merged} urls={videoUrls} onNavigate={setPage} onMetrics={handlePlayerMetrics} />; break;
+    case 'live': content = <MonitorPage mode="live" history={live} videoUrl={videoUrls.live} onNavigate={setPage} scenario={scenario} />; break;
+    case 'vod': content = <MonitorPage mode="vod" history={vod} videoUrl={videoUrls.vod} onNavigate={setPage} scenario={scenario} />; break;
+    case 'compare': content = <ComparePage live={live} vod={vod} urls={videoUrls} onNavigate={setPage} recordings={recordings} onRecording={(session) => setRecordings((previous) => ({ ...previous, [session.condition]: session }))} />; break;
     case 'statistics': content = <StatisticsPage live={live} vod={vod} merged={merged} />; break;
-    case 'tests': content = <TestsPage scenario={scenario} onScenarioChange={handleScenarioChange} live={live} vod={vod} />; break;
+    case 'tests': content = <TestsPage urls={videoUrls} onNavigate={setPage} />; break;
     case 'reports': content = <ReportsPage live={live} vod={vod} />; break;
     case 'settings': content = <SettingsPage urls={videoUrls} onUrlChange={(mode, url) => setVideoUrls((old) => ({ ...old, [mode]: url }))} refreshInterval={refreshInterval} onRefreshChange={setRefreshInterval} />; break;
     default: content = <DashboardPage live={live} vod={vod} merged={merged} onNavigate={setPage} now={now} />;
