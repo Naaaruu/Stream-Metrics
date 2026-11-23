@@ -311,3 +311,13 @@ h1 { margin-bottom: 10px; font-size: clamp(25px, 2.25vw, 34px); letter-spacing: 
   .video-corner-mark { font-size: 7px; }
   .footer { flex-direction: column; align-items: flex-start; gap: 5px; }
 }
+
+.source-status { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.chart-empty { display: grid; place-items: center; color: #94a6bd; font-size: 13px; text-align: center; }
+
+@media (max-width: 540px) {
+  .topbar-right { justify-content: flex-end; flex-wrap: wrap; gap: 3px 6px; }
+  .topbar-right .source-status { justify-content: flex-end; }
+  .topbar-right .badge { padding: 3px 5px; font-size: 8px; letter-spacing: 0; }
+  .topbar .breadcrumb { display: none; }
+}
