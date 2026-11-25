@@ -18,10 +18,12 @@ from datetime import date, datetime
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
 from metrics import generator
+from netem import Conditions, TcController, effective_vod_rate_kbps, shaper, vod_router
 from metrics.schemas import (
     HistoryResponse,
     LatestResponse,
@@ -36,6 +38,7 @@ from metrics.schemas import (
 from metrics.store import MetricsStore, TICK_INTERVAL_SEC
 
 store = MetricsStore()
+tc = TcController()
 
 
 @asynccontextmanager
@@ -59,6 +62,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(vod_router)
 
 
 # -- 헬스체크 ---------------------------------------------------------------
@@ -184,6 +190,73 @@ def set_scenario(payload: ScenarioUpdate) -> ScenarioUpdateResponse:
         samples=generator.HISTORY_SIZE,
         message=f"시나리오가 '{store.scenario}'(으)로 변경되었습니다.",
     )
+
+
+# -- 네트워크 실험 (실제 조건 적용) -----------------------------------------------
+
+
+class NetemRequest(BaseModel):
+    bandwidthKbps: float = Field(gt=0, le=1_000_000)
+    delayMs: float = Field(ge=0, le=10_000)
+    lossPercent: float = Field(ge=0, le=100)
+    vodUrl: str | None = None
+
+
+netem_state: dict = {"active": False, "conditions": None}
+
+
+def _netem_snapshot() -> dict:
+    return {**netem_state, "vodProxy": shaper.stats()}
+
+
+@app.post("/api/netem", tags=["netem"])
+async def netem_apply(payload: NetemRequest) -> dict:
+    """LIVE는 tc netem, VOD는 프록시로 조건을 실제 적용한다. 대상별 성공 여부를 각각 돌려준다."""
+    try:
+        cond = Conditions(payload.bandwidthKbps, payload.delayMs, payload.lossPercent)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    live = await asyncio.to_thread(tc.apply, cond)
+
+    vod: dict
+    if payload.vodUrl:
+        try:
+            proxy_path = shaper.configure(cond, payload.vodUrl)
+            vod = {
+                "ok": True,
+                "proxyPath": proxy_path,
+                "effectiveKbps": round(effective_vod_rate_kbps(cond), 1),
+                "detail": "프록시 적용됨 · 손실률은 TCP 처리량 감소로 환산",
+            }
+        except ValueError as exc:
+            shaper.reset()
+            vod = {"ok": False, "detail": str(exc)}
+    else:
+        shaper.reset()
+        vod = {"ok": False, "detail": "VOD 영상 주소가 설정되지 않아 프록시를 켜지 않았습니다."}
+
+    netem_state.update(
+        active=live.ok or vod["ok"],
+        conditions={"bandwidthKbps": cond.bandwidth_kbps, "delayMs": cond.delay_ms, "lossPercent": cond.loss_percent},
+    )
+    return {**_netem_snapshot(), "live": {"ok": live.ok, "detail": live.detail}, "vod": vod}
+
+
+@app.delete("/api/netem", tags=["netem"])
+async def netem_clear() -> dict:
+    """적용한 조건을 모두 해제한다."""
+    live = await asyncio.to_thread(tc.clear)
+    shaper.reset()
+    netem_state.update(active=False, conditions=None)
+    return {**_netem_snapshot(), "live": {"ok": live.ok, "detail": live.detail}}
+
+
+@app.get("/api/netem", tags=["netem"])
+async def netem_status() -> dict:
+    """현재 적용 상태와 VOD 프록시 통계, LIVE 사이드카 컨테이너 상태."""
+    live = await asyncio.to_thread(tc.available)
+    return {**_netem_snapshot(), "liveAvailable": live.ok, "liveDetail": live.detail}
 
 
 # -- 리포트 ---------------------------------------------------------------------

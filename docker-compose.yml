@@ -1,0 +1,23 @@
+# LIVE(WebRTC) 실험용: MediaMTX + tc netem 사이드카
+# 주의: 이미 Windows에서 MediaMTX를 직접 실행 중이면 먼저 종료하세요 (포트 충돌).
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: stream-metrics-mediamtx
+    environment:
+      # 브라우저가 컨테이너 밖(호스트)에서 접속하므로 ICE 후보에 호스트 주소를 추가
+      MTX_WEBRTCADDITIONALHOSTS: 127.0.0.1
+    ports:
+      - "1935:1935"       # RTMP  (OBS 송출)
+      - "8889:8889"       # WebRTC WHEP (HTTP 시그널링)
+      - "8189:8189/udp"   # WebRTC 미디어 (tc netem이 적용되는 대상)
+
+  netem:
+    build: ./docker/netem
+    container_name: stream-metrics-netem
+    network_mode: "service:mediamtx"   # MediaMTX와 네트워크를 공유 -> 여기서 건 tc 규칙이 MediaMTX 송신 패킷에 적용됨
+    cap_add:
+      - NET_ADMIN                      # tc 실행에 필요
+    depends_on:
+      - mediamtx
+    restart: unless-stopped

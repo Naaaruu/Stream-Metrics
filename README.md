@@ -34,3 +34,37 @@ ffmpeg -i 'C:\Videos\team.mp4' -map '0:v:0' -map '0:a:0?' -c:v libx264 -pix_fmt 
 ```
 
 VOD 설정에 `http://localhost:5173/vod/team/master.m3u8`을 입력합니다. 마스터 매니페스트의 `BANDWIDTH`가 제공될 때 선택 화질의 명목 비트레이트가 표시됩니다. 재생 위치에서 이어지는 버퍼 잔여량은 브라우저에서 읽고, FastAPI 지표는 별도 카드와 이력으로 표시합니다.
+
+## 네트워크 실험: 실제 조건 적용 (대역폭 · 지연 · 패킷 손실)
+
+대시보드 **네트워크 실험** 탭에서 조건을 입력하고 *실험 시작*을 누르면 백엔드가 실제로 적용합니다.
+
+| 대상 | 방식 | 필요한 것 |
+| --- | --- | --- |
+| VOD (HLS/TCP) | FastAPI 프록시(`/api/vod-proxy`)가 응답을 지연·제한 | 백엔드만 실행하면 됨 |
+| LIVE (WebRTC/UDP) | Docker 사이드카에서 `tc netem` (UDP 8189 미디어 패킷만) | Docker Desktop(WSL2) |
+
+### LIVE 적용 준비 (Docker)
+
+```powershell
+# 직접 실행 중인 MediaMTX가 있으면 먼저 종료한 뒤
+docker compose up -d --build
+```
+
+OBS 송출 주소(`rtmp://localhost:1935/mystream`)와 WHEP 주소(`http://localhost:8889/mystream/whep`)는 그대로입니다.
+규칙이 걸렸는지 확인하려면 실험 시작 후 `docker exec stream-metrics-netem tc qdisc show dev eth0`에 `netem`이 보여야 합니다.
+
+### 동작 방식과 한계
+
+- **LIVE**: 손실·지연·대역폭이 패킷 단위로 실제 적용됩니다. 수신 손실률은 WebRTC `getStats`에 그대로 나타납니다.
+- **VOD**: HLS는 TCP라 손실이 재전송으로 가려지므로, 손실률을 Mathis 공식(처리량 ≈ 1.22·MSS / (RTT·√p))으로 **처리량 감소**로 환산해 적용합니다. 패킷 단위 손실이 아니라 근사 모델입니다.
+- VOD 프록시는 매니페스트의 세그먼트 주소가 **상대 경로**일 때 동작합니다. (위 FFmpeg 변환 결과는 해당)
+- 실험은 이 탭의 플레이어에만 프록시를 씁니다. LIVE는 컨테이너에 규칙이 걸려 있으므로 *중단/초기화*를 누를 때까지 다른 탭에도 영향이 있습니다.
+
+### 테스트
+
+```powershell
+Set-Location backend
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m unittest tests.test_netem -v
+```

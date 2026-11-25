@@ -16,6 +16,7 @@ import {
   getLatest, getStats, initialHistory, makeSample, SCENARIOS,
 } from './data/mockMetrics.js';
 import { DEFAULT_CONDITIONS, simulateNetworkSample, validateConditions } from './data/networkExperiment.js';
+import { applyNetem, clearNetem, proxiedVodUrl } from './data/netemApi.js';
 import { alignByTimestamp, recordingCsv, summarizeRecording } from './data/comparison.js';
 import './App.css';
 
@@ -436,6 +437,19 @@ function TestsPage({ urls, onNavigate }) {
   const [history, setHistory] = useState([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+  const [applied, setApplied] = useState(null);
+  const [applyError, setApplyError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [liveReal, setLiveReal] = useState(null);
+  const [vodReal, setVodReal] = useState(null);
+  const [liveRealHistory, setLiveRealHistory] = useState([]);
+  const onLiveMetrics = useCallback((sample) => {
+    setLiveReal(sample);
+    if (sample && Number.isFinite(sample.packetLoss)) {
+      setLiveRealHistory((previous) => [...previous.slice(-71), { timestamp: sample.timestamp, realLoss: Number(sample.packetLoss.toFixed(2)) }]);
+    }
+  }, []);
+  const onVodMetrics = useCallback((sample) => setVodReal(sample), []);
 
   useEffect(() => {
     if (!running) return undefined;
@@ -447,17 +461,48 @@ function TestsPage({ urls, onNavigate }) {
     return () => window.clearInterval(timer);
   }, [conditions, running]);
 
-  function start(event) {
+  async function start(event) {
     event.preventDefault();
+    let next;
     try {
-      const next = validateConditions(fields);
-      setConditions(next);
-      setHistory([simulateNetworkSample(next, 0)]);
-      setError('');
-      setRunning(true);
+      next = validateConditions(fields);
     } catch (validationError) {
       setError(validationError.message);
+      return;
     }
+    setError('');
+    setApplyError('');
+    setLiveRealHistory([]);
+    setConditions(next);
+    setHistory([simulateNetworkSample(next, 0)]);
+    setRunning(true);
+    setBusy(true);
+    try {
+      setApplied(await applyNetem(next, urls.vod));
+    } catch (requestError) {
+      setApplied(null);
+      setApplyError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function release() {
+    setBusy(true);
+    try {
+      await clearNetem();
+      setApplyError('');
+    } catch (requestError) {
+      setApplyError(`적용 해제 실패: ${requestError.message}`);
+    } finally {
+      setApplied(null);
+      setBusy(false);
+    }
+  }
+
+  function stop() {
+    setRunning(false);
+    void release();
   }
 
   function reset() {
@@ -466,6 +511,8 @@ function TestsPage({ urls, onNavigate }) {
     setConditions(null);
     setHistory([]);
     setError('');
+    setLiveRealHistory([]);
+    void release();
   }
 
   function updateField(event) {
@@ -475,15 +522,28 @@ function TestsPage({ urls, onNavigate }) {
   }
 
   const latest = history.at(-1);
+  const liveApplied = applied?.live?.ok === true;
+  const vodApplied = applied?.vod?.ok === true;
+  const vodUrl = proxiedVodUrl(applied) ?? urls.vod;
   return (
     <>
       <div className="page-title-row">
-        <div><h1>네트워크 실험</h1><p>가상 조건에서 계산한 결과와 현재 영상의 실제 플레이어 지표를 관찰합니다.</p></div>
-        <Badge variant="cyan"><FlaskConical size={14} /> 시뮬레이션</Badge>
+        <div><h1>네트워크 실험</h1><p>입력한 조건을 실제 스트림에 적용하고, 계산한 예상값과 플레이어 실측값을 비교합니다.</p></div>
+        <Badge variant="cyan"><FlaskConical size={14} /> {liveApplied || vodApplied ? '실제 적용 중' : '시뮬레이션'}</Badge>
       </div>
       <div className="test-banner">
         <div className="test-banner-icon"><FlaskConical size={24} /></div>
-        <div><strong>실제 네트워크 제한 미적용</strong><p>입력 조건은 이 화면의 시뮬레이션 계산에만 적용됩니다. 두 플레이어는 현재 네트워크에서 재생됩니다.</p></div>
+        <div>
+          <strong>{liveApplied || vodApplied ? '실제 네트워크 조건 적용 중' : '실제 네트워크 제한 미적용'}</strong>
+          {applied ? (
+            <p>
+              LIVE: {applied.live.ok ? '적용됨' : '미적용'} · {applied.live.detail}<br />
+              VOD: {applied.vod.ok ? `적용됨 (유효 처리량 상한 ${formatExperimentKbps.format(applied.vod.effectiveKbps)} kbps)` : '미적용'} · {applied.vod.detail}
+            </p>
+          ) : (
+            <p>{applyError || '실험을 시작하면 백엔드가 LIVE(tc netem)와 VOD(프록시)에 조건을 적용합니다. 적용에 실패하면 아래 계산값만 표시됩니다.'}</p>
+          )}
+        </div>
       </div>
       <Card className="settings-card experiment-form">
         <form noValidate onSubmit={start}>
@@ -505,15 +565,16 @@ function TestsPage({ urls, onNavigate }) {
             </div>
           </fieldset>
           {error && <p className="experiment-error" role="alert">{error}</p>}
+          {applyError && applied === null && running && <p className="experiment-error" role="alert">{applyError}</p>}
           <div className="experiment-actions">
-            <button className="primary-button" disabled={running}>실험 시작</button>
-            <button type="button" className="video-source-btn" disabled={!running} onClick={() => setRunning(false)}>중단</button>
-            <button type="button" className="video-source-btn" onClick={reset}>초기화</button>
-            <span role="status">{running ? '시뮬레이션 실행 중' : latest ? '시뮬레이션 중단됨' : '시뮬레이션 대기 중'}</span>
+            <button className="primary-button" disabled={running || busy}>실험 시작</button>
+            <button type="button" className="video-source-btn" disabled={!running || busy} onClick={stop}>중단</button>
+            <button type="button" className="video-source-btn" disabled={busy} onClick={reset}>초기화</button>
+            <span role="status">{busy ? '적용 중…' : running ? '실험 실행 중' : latest ? '실험 중단됨 · 조건 해제' : '실험 대기 중'}</span>
           </div>
         </form>
       </Card>
-      <SectionTitle title="시뮬레이션 결과" subtitle="데모 기준값에 대역폭 상한, 추가 지연, 추가 손실 확률을 적용한 계산값입니다." />
+      <SectionTitle title="예상값 (계산 모델)" subtitle="데모 기준값에 대역폭 상한, 추가 지연, 추가 손실 확률을 적용한 계산값입니다." />
       {latest && (
         <div className="compare-detail-grid">
           <ChartCard title="예상 지연 추이" description="시뮬레이션 · 최근 72개 샘플" data={history} lines={[{ key: 'liveLatency', name: 'LIVE 모델', color: COLORS.live }, { key: 'vodLatency', name: 'VOD 모델', color: COLORS.vod }]} unit="ms" legend height={242} />
@@ -528,10 +589,26 @@ function TestsPage({ urls, onNavigate }) {
           </Card>
         </div>
       )}
-      <SectionTitle title="실제 플레이어 지표" subtitle="현재 연결에서 받은 WebRTC·HLS 지표입니다. HLS 명목 비트레이트는 매니페스트에 선언된 값입니다." />
+      <SectionTitle title="실측값 (실제 플레이어 지표)" subtitle="브라우저가 직접 측정한 WebRTC·HLS 지표입니다. 조건이 실제로 적용됐는지 여기서 확인합니다." />
+      <div className="compare-detail-grid">
+        <Card>
+          <div className="card-heading"><div><h3>실측 요약</h3><p>{liveApplied || vodApplied ? '조건 적용 상태에서 측정 중' : '조건 미적용 상태(기준선)'}</p></div></div>
+          <div className="table-wrap"><table className="data-table">
+            <thead><tr><th>대상</th><th>지표</th><th>실측값</th></tr></thead>
+            <tbody>
+              <tr><th>LIVE</th><td>RTP 패킷 손실률</td><td>{liveReal?.packetLoss == null ? '미측정' : `${format(liveReal.packetLoss, 2)}%`}</td></tr>
+              <tr><th>LIVE</th><td>수신 비트레이트</td><td>{liveReal?.bitrate == null ? '미측정' : `${formatExperimentKbps.format(Math.round(liveReal.bitrate))} kbps`}</td></tr>
+              <tr><th>LIVE</th><td>지터 / RTT</td><td>{liveReal?.jitter == null ? '미측정' : `${format(liveReal.jitter, 1)} ms`} / {liveReal?.rtt == null ? '미측정' : `${format(liveReal.rtt, 0)} ms`}</td></tr>
+              <tr><th>VOD</th><td>버퍼 잔여량</td><td>{vodReal ? `${format(vodReal.buffer, 1)} s` : '미측정'}</td></tr>
+              <tr><th>VOD</th><td>버퍼링 발생 횟수</td><td>{vodReal ? `${vodReal.bufferingCount}회` : '미측정'}</td></tr>
+            </tbody>
+          </table></div>
+        </Card>
+        <ChartCard title="실측 LIVE 패킷 손실률" description="WebRTC inbound-rtp 기준 · 최근 72개 샘플" data={liveRealHistory} lines={[{ key: 'realLoss', name: '실측 손실률', color: COLORS.warning }]} unit="%" area height={242} />
+      </div>
       <div className="compare-video-grid">
-        <Card className="compare-video-card"><div className="card-heading"><div><h3>LIVE · WebRTC</h3></div></div><LivePlayer url={urls.live} onConnect={() => onNavigate('settings')} /></Card>
-        <Card className="compare-video-card"><div className="card-heading"><div><h3>VOD · HLS</h3></div></div><VodPlayer url={urls.vod} onConnect={() => onNavigate('settings')} /></Card>
+        <Card className="compare-video-card"><div className="card-heading"><div><h3>LIVE · WebRTC</h3></div></div><LivePlayer url={urls.live} onConnect={() => onNavigate('settings')} onMetrics={onLiveMetrics} /></Card>
+        <Card className="compare-video-card"><div className="card-heading"><div><h3>VOD · HLS{vodApplied ? ' · 프록시 경유' : ''}</h3></div></div><VodPlayer url={vodUrl} onConnect={() => onNavigate('settings')} onMetrics={onVodMetrics} /></Card>
       </div>
     </>
   );
