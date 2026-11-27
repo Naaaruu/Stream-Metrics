@@ -202,7 +202,7 @@ class NetemRequest(BaseModel):
     vodUrl: str | None = None
 
 
-netem_state: dict = {"active": False, "conditions": None}
+netem_state: dict = {"active": False, "conditions": None, "liveApplied": False}
 
 
 def _netem_snapshot() -> dict:
@@ -218,6 +218,7 @@ async def netem_apply(payload: NetemRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     live = await asyncio.to_thread(tc.apply, cond)
+    live_applied_at = int(datetime.now().timestamp() * 1000) if live.ok else None
 
     vod: dict
     if payload.vodUrl:
@@ -225,6 +226,7 @@ async def netem_apply(payload: NetemRequest) -> dict:
             proxy_path = shaper.configure(cond, payload.vodUrl)
             vod = {
                 "ok": True,
+                "appliedAt": int(datetime.now().timestamp() * 1000),
                 "proxyPath": proxy_path,
                 "effectiveKbps": round(effective_vod_rate_kbps(cond), 1),
                 "detail": "프록시 적용됨 · 손실률은 TCP 처리량 감소로 환산",
@@ -238,9 +240,10 @@ async def netem_apply(payload: NetemRequest) -> dict:
 
     netem_state.update(
         active=live.ok or vod["ok"],
+        liveApplied=live.ok,
         conditions={"bandwidthKbps": cond.bandwidth_kbps, "delayMs": cond.delay_ms, "lossPercent": cond.loss_percent},
     )
-    return {**_netem_snapshot(), "live": {"ok": live.ok, "detail": live.detail}, "vod": vod}
+    return {**_netem_snapshot(), "live": {"ok": live.ok, "detail": live.detail, "appliedAt": live_applied_at}, "vod": vod}
 
 
 @app.delete("/api/netem", tags=["netem"])
@@ -248,7 +251,10 @@ async def netem_clear() -> dict:
     """적용한 조건을 모두 해제한다."""
     live = await asyncio.to_thread(tc.clear)
     shaper.reset()
-    netem_state.update(active=False, conditions=None)
+    live_remains = netem_state["liveApplied"] and not live.ok
+    netem_state.update(active=live_remains, liveApplied=live_remains)
+    if not live_remains:
+        netem_state["conditions"] = None
     return {**_netem_snapshot(), "live": {"ok": live.ok, "detail": live.detail}}
 
 

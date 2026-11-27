@@ -32,6 +32,7 @@ class VodShaper:
         self.reset()
 
     def reset(self) -> None:
+        self.generation = getattr(self, "generation", 0) + 1
         self.base: str | None = None
         self.filename: str | None = None
         self.delay_ms = 0.0
@@ -88,13 +89,17 @@ async def vod_proxy(path: str, request: Request) -> StreamingResponse:
     if ".." in path.split("/"):
         raise HTTPException(status_code=400, detail="잘못된 경로입니다.")
 
+    base = shaper.base
+    generation = shaper.generation
     shaper.requests += 1
     await asyncio.sleep(shaper.delay_ms / 1000)
+    if generation != shaper.generation:
+        raise HTTPException(status_code=409, detail="VOD 실험 조건이 변경되었습니다.")
     if shaper.blocked:
         shaper.rejected += 1
         raise HTTPException(status_code=503, detail="패킷 손실률 100%: 요청이 전달되지 않습니다.")
 
-    target = shaper.base + path
+    target = base + path
     if request.url.query:
         target += "?" + request.url.query
     headers = {"range": request.headers["range"]} if "range" in request.headers else {}
@@ -109,8 +114,10 @@ async def vod_proxy(path: str, request: Request) -> StreamingResponse:
     async def body() -> AsyncIterator[bytes]:
         try:
             async for chunk in upstream.aiter_raw(CHUNK_BYTES):
-                await shaper.throttle(len(chunk))
-                shaper.bytes_sent += len(chunk)
+                if generation == shaper.generation:
+                    await shaper.throttle(len(chunk))
+                    if generation == shaper.generation:
+                        shaper.bytes_sent += len(chunk)
                 yield chunk
         finally:
             await upstream.aclose()
@@ -118,4 +125,5 @@ async def vod_proxy(path: str, request: Request) -> StreamingResponse:
 
     out_headers = {k: v for k, v in upstream.headers.items() if k.lower() in PASS_HEADERS}
     out_headers["Cache-Control"] = "no-store"
+    out_headers["Timing-Allow-Origin"] = "*"
     return StreamingResponse(body(), status_code=upstream.status_code, headers=out_headers)

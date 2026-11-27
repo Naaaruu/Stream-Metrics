@@ -138,6 +138,13 @@ class TcController:
         problem = self._precheck()
         if problem:
             return problem
-        done = self._exec(tc_clear_command())
-        # 규칙이 원래 없었던 경우(RTNETLINK: Cannot delete qdisc)도 정상으로 취급
-        return TargetResult(True, "tc 규칙 제거됨" if done.returncode == 0 else "적용된 tc 규칙 없음")
+        try:
+            done = self._exec(tc_clear_command())
+        except (OSError, subprocess.SubprocessError) as exc:
+            return TargetResult(False, f"tc 해제 실패: {exc}")
+        if done.returncode == 0:
+            return TargetResult(True, "tc 규칙 제거됨")
+        detail = (done.stderr or done.stdout).strip()
+        if "cannot delete qdisc with handle of zero" in detail.lower() or "no such file or directory" in detail.lower():
+            return TargetResult(True, "적용된 tc 규칙 없음")
+        return TargetResult(False, f"tc 해제 실패: {detail or done.returncode}")

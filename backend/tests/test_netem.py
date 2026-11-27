@@ -1,10 +1,12 @@
 """실행: cd backend && python -m unittest tests.test_netem -v"""
 import http.server
+import asyncio
 import socketserver
 import subprocess
 import threading
 import time
 import unittest
+import httpx
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -30,6 +32,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 class ShapingTests(unittest.TestCase):
+    def test_clear_distinguishes_missing_rules_from_failure(self):
+        def runner_for(message):
+            def runner(argv):
+                if argv[1] == "inspect":
+                    return subprocess.CompletedProcess(argv, 0, "true\n", "")
+                return subprocess.CompletedProcess(argv, 2, "", message)
+            return runner
+
+        self.assertTrue(TcController("c1", runner_for("Error: Cannot delete qdisc with handle of zero.")).clear().ok)
+        failed = TcController("c1", runner_for("RTNETLINK answers: Operation not permitted")).clear()
+        self.assertFalse(failed.ok)
+        self.assertIn("Operation not permitted", failed.detail)
+
     def test_validation(self):
         with self.assertRaises(ValueError):
             Conditions(0, 0, 0)
@@ -102,6 +117,7 @@ class ProxyTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
+        cls.srv.server_close()
 
     def url(self, name="master.m3u8"):
         return f"http://127.0.0.1:{self.port}/vod/team/{name}"
@@ -117,6 +133,7 @@ class ProxyTests(unittest.TestCase):
         r = self.client.get("/api/vod-proxy/segment-000.ts")
         took = time.monotonic() - t
         self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["Timing-Allow-Origin"], "*")
         self.assertEqual(r.content, PAYLOAD)
         self.assertGreater(took, 0.8)  # 100KB / (100KB/s) ~ 1s
 
@@ -140,6 +157,25 @@ class ProxyTests(unittest.TestCase):
             shaper.configure(Conditions(1000, 0, 0), "ftp://x/y.m3u8")
         with self.assertRaises(ValueError):
             shaper.configure(Conditions(1000, 0, 0), "http://x/dir/")
+
+
+class ProxySessionBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_clear_after_request_starts_does_not_read_reset_origin(self):
+        app = FastAPI()
+        app.include_router(vod_router)
+        shaper.configure(Conditions(1000, 300, 0), "http://localhost/test/master.m3u8")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            pending = asyncio.create_task(client.get("/api/vod-proxy/segment.ts"))
+
+            async def request_started():
+                while not shaper.stats()["requests"]:
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(request_started(), timeout=1)
+            shaper.reset()
+            response = await pending
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(shaper.stats(), {"requests": 0, "bytesSent": 0, "rejected": 0})
 
 
 if __name__ == "__main__":
