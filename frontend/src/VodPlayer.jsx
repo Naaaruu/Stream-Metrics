@@ -3,22 +3,26 @@ import { ArrowRight, Play } from 'lucide-react';
 import Hls from 'hls.js';
 import { readHlsSegment } from './data/vodMetrics.js';
 import { vodSegmentRoute } from './data/netemApi.js';
+import { createPlaybackMetrics, newSessionId } from './data/playbackMetrics.js';
+import { isBigBuckBunnySource } from './data/vodAttribution.js';
 
-export default function VodPlayer({ url, onConnect, small = false, onMetrics }) {
-  return <VodSession key={url} url={url} onConnect={onConnect} small={small} onMetrics={onMetrics} />;
+export default function VodPlayer({ url, sourceUrl = url, onConnect, small = false, onMetrics, onStatus, showMetrics = true }) {
+  const showAttribution = isBigBuckBunnySource(sourceUrl, window.location.origin);
+  return <VodSession key={url} {...{ url, onConnect, small, onMetrics, onStatus, showMetrics, showAttribution }} />;
 }
 
-function VodSession({ url, onConnect, small, onMetrics }) {
+function VodSession({ url, onConnect, small, onMetrics, onStatus, showMetrics, showAttribution }) {
   const [active, setActive] = useState(true);
   return (
     <div className={`video-panel video-vod ${small ? 'video-small' : ''}`}>
       {url && active ? (
-        <VodPlayback url={url} onStop={() => setActive(false)} onMetrics={onMetrics} />
+        <VodPlayback url={url} onStop={() => setActive(false)} onMetrics={onMetrics} onStatus={onStatus}
+          showMetrics={showMetrics} showAttribution={showAttribution} />
       ) : (
         <div className="video-placeholder">
           <div className="video-orbit video-orbit-one" /><div className="video-orbit video-orbit-two" />
           <div className="video-play-icon"><Play size={34} fill="currentColor" /></div>
-          <strong>ON-DEMAND VIDEO</strong>
+          <strong>VOD 영상</strong>
           <p>{url ? '재생 종료' : '연결된 영상 소스가 없습니다'}</p>
           {url ? (
             <button className="video-source-btn" onClick={() => setActive(true)}>다시 재생 <Play size={15} /></button>
@@ -27,30 +31,35 @@ function VodSession({ url, onConnect, small, onMetrics }) {
           )}
         </div>
       )}
-      <div className="video-overlay"><span className="badge badge-purple"><span className="badge-dot" />VOD</span><span>STREAM 02</span></div>
-      {!url && <div className="video-corner-mark">NO SIGNAL</div>}
+      <div className="video-overlay"><span className="badge badge-purple"><span className="badge-dot" />VOD</span></div>
     </div>
   );
 }
 
-function VodPlayback({ url, onStop, onMetrics }) {
+function VodPlayback({ url, onStop, onMetrics, onStatus, showMetrics, showAttribution }) {
   const videoRef = useRef(null);
   const [status, setStatus] = useState('불러오는 중');
   const [metrics, setMetrics] = useState(null);
 
   useEffect(() => {
     const video = videoRef.current;
-    const sessionId = Symbol();
-    const startedAt = performance.now();
+    const sessionId = newSessionId();
+    const playback = createPlaybackMetrics(performance.now());
     const usesHls = /\.m3u8(?:[?#]|$)/i.test(url) && Hls.isSupported();
     let hls;
     let failed = false;
-    let startupSec = null;
-    let bufferingSince = null;
-    let bufferingCount = 0;
-    let bufferingSeconds = 0;
-    let seeking = false;
     let latestThroughputKbps = null;
+    let latestDelivery = null;
+    let timingObserver;
+    const recentTimings = [];
+    const pendingSegments = new Set();
+
+    function reportStatus(label, detail) {
+      setStatus(detail ? `${label} · ${detail}` : label);
+      onStatus?.({ label, detail });
+    }
+
+    reportStatus('연결 중');
 
     function measure({ bufferingEvent = false, segment = null } = {}) {
       if (failed) return;
@@ -65,7 +74,6 @@ function VodPlayback({ url, onStop, onMetrics }) {
         }
       }
       const bitrate = Number(hls?.levels[hls.currentLevel]?.attrs.BANDWIDTH);
-      const currentStallSeconds = bufferingSince === null ? 0 : (performance.now() - bufferingSince) / 1000;
       const sample = {
         sessionId,
         usesHls,
@@ -73,21 +81,15 @@ function VodPlayback({ url, onStop, onMetrics }) {
         bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate / 1000 : null,
         segmentRoute: segment ? vodSegmentRoute(segment.responseUrl) : null,
         throughputKbps: segment?.throughputKbps ?? null,
+        delivery: segment?.delivery ?? null,
         latestThroughputKbps,
-        bufferingCount: startupSec === null ? null : bufferingCount,
-        bufferingSeconds: startupSec === null ? null : bufferingSeconds + currentStallSeconds,
-        startupSec,
+        latestDelivery,
+        ...playback.snapshot(),
         bufferingEvent,
         timestamp: Date.now(),
       };
       setMetrics(sample);
       onMetrics?.(sample);
-    }
-
-    function finishBuffering() {
-      if (bufferingSince === null) return;
-      bufferingSeconds += (performance.now() - bufferingSince) / 1000;
-      bufferingSince = null;
     }
 
     function startPlayback() {
@@ -98,55 +100,49 @@ function VodPlayback({ url, onStop, onMetrics }) {
 
     function fail(detail) {
       if (failed) return;
-      finishBuffering();
+      playback.pause();
       measure();
       failed = true;
       hls?.stopLoad();
-      setStatus(`오류 · ${detail}`);
+      reportStatus('연결 실패', detail);
       setMetrics(null);
       onMetrics?.(null);
     }
 
     const listeners = {
       loadedmetadata: () => {
-        if (!failed && video.paused) setStatus('일시정지');
         measure();
       },
       playing: () => {
         if (failed) return;
-        startupSec ??= (performance.now() - startedAt) / 1000;
-        seeking = false;
-        finishBuffering();
-        setStatus('재생 중');
+        playback.playing();
+        reportStatus('재생 중');
         measure();
       },
       pause: () => {
-        finishBuffering();
-        if (!failed && !video.ended) setStatus('일시정지');
+        playback.pause();
+        if (!failed && !video.ended) reportStatus('일시정지');
         measure();
       },
       waiting: () => {
         if (failed || video.paused || video.ended) return;
-        setStatus('버퍼링');
-        if (startupSec !== null && !seeking && !video.seeking && bufferingSince === null) {
-          bufferingSince = performance.now();
-          bufferingCount += 1;
+        reportStatus('버퍼링');
+        if (!video.seeking && playback.waiting()) {
           measure({ bufferingEvent: true });
         }
       },
       seeking: () => {
-        seeking = true;
-        finishBuffering();
-        if (!failed && !video.paused) setStatus('버퍼링');
+        playback.seeking();
+        if (!failed && !video.paused) reportStatus('탐색 중');
         measure();
       },
       seeked: () => {
-        if (!failed) setStatus(video.ended ? '재생 완료' : video.paused ? '일시정지' : video.readyState < 3 ? '버퍼링' : '재생 중');
+        if (!failed && video.paused && !video.ended) reportStatus('일시정지');
         measure();
       },
       ended: () => {
-        finishBuffering();
-        if (!failed) setStatus('재생 완료');
+        playback.pause();
+        if (!failed) reportStatus('재생 완료');
         measure();
       },
       error: () => fail(video.error?.message || '영상 파일을 재생할 수 없습니다.'),
@@ -154,14 +150,28 @@ function VodPlayback({ url, onStop, onMetrics }) {
     Object.entries(listeners).forEach(([event, handler]) => video.addEventListener(event, handler));
 
     if (usesHls) {
+      if (window.PerformanceObserver?.supportedEntryTypes?.includes('resource')) {
+        timingObserver = new PerformanceObserver((list) => {
+          recentTimings.push(...list.getEntries());
+          if (recentTimings.length > 256) recentTimings.splice(0, recentTimings.length - 256);
+        });
+        timingObserver.observe({ type: 'resource' });
+      }
       hls = new Hls({ enableWorker: true });
       hls.once(Hls.Events.MEDIA_ATTACHED, startPlayback);
       hls.on(Hls.Events.LEVEL_SWITCHED, () => measure());
       hls.on(Hls.Events.FRAG_LOADED, (_, data) => {
-        const segment = readHlsSegment(data);
-        if (!segment) return;
-        latestThroughputKbps = segment.throughputKbps;
-        measure({ segment });
+        // Let the browser expose the completed request through Resource Timing.
+        const timer = window.setTimeout(() => {
+          pendingSegments.delete(timer);
+          const segment = readHlsSegment(data, (url) =>
+            [...recentTimings.filter((entry) => entry.name === url), ...performance.getEntriesByName(url, 'resource')]);
+          if (!segment || failed) return;
+          latestThroughputKbps = segment.throughputKbps;
+          latestDelivery = segment.delivery;
+          measure({ segment });
+        }, 0);
+        pendingSegments.add(timer);
       });
       hls.on(Hls.Events.LEVEL_LOADED, (_, data) => {
         if (data.details.live) fail('종료 지점이 있는 HLS VOD 주소를 입력하세요.');
@@ -182,14 +192,17 @@ function VodPlayback({ url, onStop, onMetrics }) {
     }, 1000);
     return () => {
       window.clearInterval(timer);
+      pendingSegments.forEach((timer) => window.clearTimeout(timer));
+      timingObserver?.disconnect();
       Object.entries(listeners).forEach(([event, handler]) => video.removeEventListener(event, handler));
       hls?.destroy();
       video.pause();
       video.removeAttribute('src');
       video.load();
       onMetrics?.(null);
+      onStatus?.(null);
     };
-  }, [url, onMetrics]);
+  }, [url, onMetrics, onStatus]);
 
   return (
     <div className="vod-playback">
@@ -199,10 +212,15 @@ function VodPlayback({ url, onStop, onMetrics }) {
           <span role="status">{status}</span>
           <button className="video-source-btn" onClick={onStop}>재생 종료</button>
         </div>
-        <dl aria-label="VOD 플레이어 지표">
+        {showMetrics && <dl aria-label="VOD 플레이어 지표">
           <div><dt>버퍼 잔여량 · 플레이어 측정</dt><dd>{metrics?.buffer == null ? '미측정' : `${metrics.buffer.toFixed(1)} s`}</dd></div>
           <div><dt>선택 화질 · HLS 명목 비트레이트</dt><dd>{metrics?.bitrate == null ? '미측정' : `${Math.round(metrics.bitrate).toLocaleString('ko-KR')} kbps`}</dd></div>
-        </dl>
+        </dl>}
+        {showAttribution && <p className="vod-attribution">
+          <a href="https://peach.blender.org/" target="_blank" rel="noopener noreferrer" title="공식 출처">Big Buck Bunny</a>
+          {' © 2008 Blender Foundation · '}
+          <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener noreferrer" title="라이선스">CC BY 3.0</a>
+        </p>}
       </div>
     </div>
   );

@@ -22,6 +22,10 @@ npm.cmd run dev -- --port 5173 --strictPort
 - 준비된 파일 기반 HLS 주소가 있다면 대시보드 **설정 → VOD 영상 URL**에 입력합니다. 공개 샘플로 확인하려면 [Mux Big Buck Bunny VOD](https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8)를 사용할 수 있습니다.
 - 로컬에 2단계 검증용 파일이 있는 경우 주소는 `http://localhost:5173/vod/stage2-demo/master.m3u8`입니다. 이 샘플은 Mux가 제공하는 Blender Foundation의 Big Buck Bunny 영상 앞부분을 사용합니다. 다운로드한 파일은 로컬 생성물이며 저장소에 포함하지 않습니다.
 
+**Big Buck Bunny © 2008 Blender Foundation · CC BY 3.0**
+
+[공식 출처](https://peach.blender.org/) · [라이선스](https://creativecommons.org/licenses/by/3.0/)
+
 ### 팀 MP4를 로컬 HLS VOD로 변환
 
 MP4 파일과 [FFmpeg](https://ffmpeg.org/download.html)가 필요합니다. 이미 만들어진 HLS 파일을 사용할 때는 FFmpeg가 필요 없습니다. FFmpeg는 변환할 때만 사용하며, Vite가 `frontend/public/vod`의 매니페스트와 세그먼트를 제공하므로 별도 HTTP 서버가 필요 없습니다. MediaMTX 녹화 재생 엔드포인트는 [MP4/fMP4](https://mediamtx.org/docs/features/playback)를 제공합니다.

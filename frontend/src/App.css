@@ -141,6 +141,8 @@ h1 { margin-bottom: 10px; font-size: clamp(25px, 2.25vw, 34px); letter-spacing: 
 .vod-playback-details dl { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 10px 0 0; }
 .vod-playback-details dt { color: #9bb0c4; font-size: 11px; }
 .vod-playback-details dd { margin: 3px 0 0; font-variant-numeric: tabular-nums; }
+.vod-attribution { margin: 6px 0 0; color: #a7bad0; font-size: 11px; line-height: 1.45; }
+.vod-attribution a { color: #bfaaff; text-decoration: underline; text-underline-offset: 2px; }
 .live-receiver-metrics { margin-top: 16px; padding: 12px; border: 1px solid #30465b; border-radius: 10px; }
 .live-receiver-metrics > span { margin-left: 8px; color: #9bb0c4; font-size: 11px; }
 .live-receiver-metrics dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 10px 0 0; }
@@ -316,6 +318,135 @@ h1 { margin-bottom: 10px; font-size: clamp(25px, 2.25vw, 34px); letter-spacing: 
 
 .source-status { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .chart-empty { display: grid; place-items: center; color: #94a6bd; font-size: 13px; text-align: center; }
+
+/* Shared spacing and typography for the monitoring and experiment workspace. */
+.main-content { max-width: 1740px; padding: 25px clamp(14px, 2.1vw, 34px) 14px; }
+.topbar { height: 62px; padding-inline: clamp(14px, 2.1vw, 34px); }
+.ui-topbar-api, .breadcrumb { color: #afc0d4; font-size: 13px; }
+.brand small, .nav-group-label { color: #9bafc6; letter-spacing: .2px; font-size: 10px; }
+.project-summary { margin-bottom: 17px; }
+.page-title-row { margin-bottom: 19px; }
+.page-title-row > .badge, .page-title-row > .primary-button { margin-top: 2px; }
+.page-title-row p, .section-heading p, .chart-card p, .card-heading p, .ui-note, .metric-helper { color: #a7bad0; font-size: 13px; line-height: 1.55; }
+.section-heading { margin: 24px 0 12px; }
+.card-heading { margin-bottom: 11px; }
+.chart-card h3, .card-heading h3 { font-size: 15px; margin-bottom: 4px; }
+.ui-panel, .ui-empty, .player-card, .chart-card { padding: clamp(12px, 1.5vw, 19px); }
+.ui-panel h2, .ui-detail h2 { font-size: 16px; margin: 0 0 10px; }
+.ui-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 11px; margin-top: 12px; }
+.primary-button, .video-source-btn { min-height: 38px; padding: 8px 12px; font-size: 13px; white-space: normal; text-align: center; }
+.primary-button:disabled, .video-source-btn:disabled { opacity: .48; cursor: default; }
+.badge { font-size: 11px; white-space: normal; letter-spacing: 0; }
+.status-label { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.status-label small, .ui-topbar-api { color: #abc0d5; overflow-wrap: anywhere; }
+.ui-status-list { margin: 0; display: grid; gap: 0; }
+.ui-status-list > div { display: flex; justify-content: space-between; gap: 8px 14px; flex-wrap: wrap; padding: 9px 0; border-bottom: 1px solid #26364c; }
+.ui-status-list > div:last-child { border: 0; }
+.ui-status-list dt { color: #adbed2; font-size: 13px; }
+.ui-status-list dd { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.ui-metric { min-height: 0; min-width: 0; padding: 12px 14px; }
+.ui-metric .metric-top { color: var(--metric-color, #b4c6dd); font-size: 13px; line-height: 1.35; min-height: 18px; }
+.ui-metric .metric-number { font-size: clamp(19px, 2.1vw, 29px); letter-spacing: -.55px; margin-top: 7px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.ui-metric .metric-number small, .ui-buffering-values span { color: #b2c1d3; font-size: 12px; }
+.metric-helper { margin: 4px 0 0; }
+.monitor-layout { grid-template-columns: minmax(0, 1.35fr) minmax(310px, 1fr); align-items: start; }
+.ui-player, .ui-player-metrics { min-width: 0; }
+.ui-player-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-content: start; }
+.ui-player-metrics-compact { margin-top: 12px; }
+.ui-player-metrics-compact .ui-buffering { grid-column: 1 / -1; }
+.ui-buffering-values { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 9px; }
+.ui-buffering-values strong { color: #f6b65f; font-size: 19px; }
+.ui-player .player-footer { color: #b0c3d8; font-size: 12px; flex-wrap: wrap; }
+.ui-player .player-footer span { overflow-wrap: anywhere; }
+.ui-chart-grid { margin-top: 10px; gap: 12px; }
+.ui-chart { height: 196px; }
+.ui-chart-empty { min-height: 76px; display: grid; place-items: center; color: #a4b7cd; font-size: 13px; }
+.chart-tooltip { max-width: min(285px, 75vw); color: #d0deec; }
+.chart-tooltip b { text-align: right; }
+.chart-unit { color: #b0c3d8; text-transform: none; font-size: 11px; }
+.ui-detail { margin-top: 16px; padding: 0; }
+.ui-detail summary { padding: 12px 16px; min-height: 44px; cursor: pointer; font-weight: 700; color: #c8d9ed; }
+.ui-detail summary:focus-visible { outline: 2px solid #42c9de; outline-offset: -2px; border-radius: 12px; }
+.ui-detail-content { border-top: 1px solid #26364c; padding: 12px 16px 16px; color: #aebed1; font-size: 13px; }
+.ui-detail-content > p, .ui-panel p, .ui-empty p { margin: 0 0 9px; line-height: 1.55; }
+.ui-detail-content .table-wrap, .ui-report-results .table-wrap + .table-wrap { margin-top: 12px; }
+.ui-status-grid { margin-top: 13px; }
+.ui-stream { min-width: 0; min-height: 52px; padding: 8px 4px; }
+.ui-stream > span:nth-child(2) { flex: 1; }
+.ui-stream > span:nth-child(3) { color: #9ddbec; font-size: 12px; }
+.ui-stream small { display: block; color: #a7b8cb; }
+.ui-form { display: grid; gap: 8px; }
+.ui-form label, .ui-select-label { display: grid; gap: 6px; color: #c1d0e1; font-size: 13px; min-width: 0; }
+.ui-form p { margin: 0; color: #a7bad0; font-size: 13px; }
+.ui-form input, .ui-form select, .ui-select-label select, .experiment-fields input, .experiment-fields select {
+  width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; border-radius: 7px;
+  border: 1px solid #38506c; background: #0b1728; color: #e5f4ff; font-size: 13px;
+}
+.ui-form input::placeholder, .experiment-fields input::placeholder { color: #829ab4; }
+.ui-settings-grid, .ui-stack { align-items: start; }
+.ui-stack { display: grid; gap: 12px; }
+.ui-switch-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.ui-switch { display: flex; align-items: center; width: 47px; height: 27px; border-radius: 999px; border: 1px solid #54708a; padding: 3px; background: #243349; flex-shrink: 0; }
+.ui-switch span { width: 19px; height: 19px; border-radius: 50%; background: #ccd9e8; }
+.ui-switch[aria-checked="true"] { background: #245b68; border-color: #5fcbd9; justify-content: flex-end; }
+.ui-switch[aria-checked="true"] span { background: #73e0ea; }
+.ui-experiment fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ui-presets { margin-top: 0; }
+.ui-presets button[aria-pressed="true"], .ui-tabs button[aria-selected="true"] { color: #98effb; border-color: #4e9aae; background: #163949; }
+.experiment-fields { grid-template-columns: repeat(auto-fit, minmax(min(100%, 126px), 1fr)); }
+.experiment-fields label { color: #bdcee0; font-size: 13px; }
+.ui-apply { border-top: 1px solid #26364c; margin-top: 12px; padding-top: 10px; }
+.ui-apply .ui-actions { margin: 0 0 6px; }
+.ui-apply p { margin: 4px 0; font-size: 13px; overflow-wrap: anywhere; }
+.ui-panel > .ui-note { margin: 9px 0 0; }
+.ui-experiment-players, .ui-save-result, .ui-report-results { margin-top: 14px; }
+.ui-filter-grid, .ui-stats-summary { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+.ui-stats-summary { margin: 12px 0; }
+.ui-report-source { border-top: 1px solid #26364c; padding-top: 8px; margin-top: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.ui-report-source p, .ui-report-source ul { color: #a7bad0; margin: 4px 0; }
+.ui-condition-list { margin-top: 8px; }
+.ui-empty, .ui-notice { margin: 12px 0; }
+.data-table { font-size: 13px; }
+.data-table th { color: #b4c7db; font-size: 12px; padding: 9px 10px; }
+.data-table td { padding: 9px 10px; }
+.data-table td.experiment-error { color: #ff9caa; }
+.table-wrap { max-width: 100%; overflow-x: auto; }
+.footer { margin-top: 28px; color: #9eafc3; }
+.ui-monitor-rail { min-width: 0; }
+.ui-monitor-charts .ui-chart-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 172px), 1fr)); }
+.ui-monitor-charts .chart-card { padding: 12px; }
+.ui-monitor-charts .ui-chart { height: 154px; }
+.ui-monitor-charts .chart-card h3 { font-size: 13px; }
+.ui-recent-experiments { margin-top: 14px; }
+.ui-recent-experiments .card-heading { align-items: center; flex-wrap: wrap; }
+.ui-recent-experiments .card-heading h2 { margin: 0; }
+.ui-recent-experiments tbody th { max-width: 32ch; }
+.ui-recent-experiments tbody .text-action { text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.ui-comparison-bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 225px), 1fr)); gap: 12px; }
+.ui-comparison-duration { margin: 12px 0 0; padding: 8px 12px; border-left: 2px solid #f6b65f; }
+.chart-card .ui-chart-marker { color: #f6b65f; margin: 0 0 4px; font-size: 12px; }
+.ui-chart-marker::before { content: ''; display: inline-block; vertical-align: middle; width: 14px; border-top: 1px dashed currentColor; margin-right: 6px; }
+.ui-experiment-actions [role="status"] { margin-inline-start: auto; }
+.ui-experiment-players { align-items: start; margin-top: 0; }
+.ui-experiment-players .ui-player .player-footer { min-height: 38px; margin: 8px 0 0; }
+.ui-experiment-players .video-vod:has(.vod-playback) { background: none; border: 0; }
+.ui-experiment-players .vod-playback .stream-video { border-radius: 10px; border: 1px solid #30465b; }
+.ui-experiment-players .vod-playback-details { padding: 0; }
+.ui-report-name { margin-top: 12px; max-width: 420px; }
+.ui-danger-button { color: #ff9caa; border-color: #824c58; }
+.ui-live-diagnostics { margin-top: 12px; }
+@media (max-width: 1030px) {
+  .monitor-layout { grid-template-columns: minmax(0, 1fr); }
+  .ui-player-metrics:not(.ui-player-metrics-compact) { grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); }
+}
+@media (max-width: 700px) {
+  .page-title-row { gap: 8px; }
+  .ui-chart { height: 174px; }
+  .ui-chart-grid, .ui-experiment-players { grid-template-columns: minmax(0, 1fr); }
+  .ui-panel, .ui-detail-content { padding-inline: 12px; }
+  .ui-status-list > div { gap: 7px; }
+  .ui-experiment-actions [role="status"] { margin-inline-start: 0; flex-basis: 100%; }
+}
 
 @media (max-width: 540px) {
   .topbar-right { justify-content: flex-end; flex-wrap: wrap; gap: 3px 6px; }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Radio } from 'lucide-react';
 import { readVideoMetrics } from './data/webrtcMetrics.js';
+import { createPlaybackMetrics, newSessionId } from './data/playbackMetrics.js';
 
 const CONNECT_TIMEOUT_MS = 15000;
 
@@ -19,7 +20,7 @@ export default function LivePlayer(props) {
   return <LiveSession key={props.url} {...props} />;
 }
 
-function LiveSession({ url, onConnect, small = false, onMetrics }) {
+function LiveSession({ url, onConnect, small = false, onMetrics, onStatus, showMetrics = true }) {
   const videoRef = useRef(null);
   const [attempt, setAttempt] = useState(0);
   const [status, setStatus] = useState({ label: '연결 중' });
@@ -30,6 +31,8 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
 
     const video = videoRef.current;
     const stream = new MediaStream();
+    const sessionId = newSessionId();
+    const playback = createPlaybackMetrics(performance.now());
     let peer;
     let sessionUrl;
     let stopped = false;
@@ -38,6 +41,16 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
     let previousVideo = null;
     const timeout = window.setTimeout(() => fail('영상 수신 시간이 초과됐습니다.'), CONNECT_TIMEOUT_MS);
 
+    function reportStatus(label, detail) {
+      const next = { label, detail };
+      setStatus(next);
+      onStatus?.(next);
+    }
+
+    function emit(sample, bufferingEvent = false) {
+      onMetrics?.({ ...sample, ...playback.snapshot(), sessionId, bufferingEvent, timestamp: Date.now() });
+    }
+
     async function collectStats() {
       try {
         const report = await peer.getStats();
@@ -45,12 +58,12 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
         const result = readVideoMetrics(report, previousVideo);
         previousVideo = result.video;
         setMetrics(result.metrics);
-        onMetrics?.(result.metrics ? { ...result.metrics, timestamp: Date.now() } : null);
+        emit(result.metrics);
       } catch {
         if (stopped) return;
         previousVideo = null;
         setMetrics(null);
-        onMetrics?.(null);
+        emit();
       }
       statsTimer = window.setTimeout(collectStats, 1000);
     }
@@ -69,8 +82,7 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
       previousVideo = null;
       gatheringDone?.();
       deleteSession();
-      video.removeEventListener('playing', playing);
-      video.removeEventListener('error', mediaError);
+      Object.entries(listeners).forEach(([event, handler]) => video.removeEventListener(event, handler));
       if (peer) {
         peer.ontrack = null;
         peer.onconnectionstatechange = null;
@@ -83,14 +95,18 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
 
     function fail(detail) {
       if (stopped) return;
+      playback.pause();
+      emit();
       close();
       setMetrics(null);
-      setStatus({ label: '연결 실패', detail });
+      reportStatus('연결 실패', detail);
     }
 
     function playing() {
       window.clearTimeout(timeout);
-      setStatus({ label: '재생 중' });
+      playback.playing();
+      reportStatus('재생 중');
+      emit();
       if ((!small || onMetrics) && statsTimer === undefined) {
         statsTimer = window.setTimeout(collectStats, 1000);
       }
@@ -99,6 +115,21 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
     function mediaError() {
       fail('브라우저에서 수신한 영상을 재생할 수 없습니다.');
     }
+
+    const listeners = {
+      playing,
+      pause: () => {
+        playback.pause();
+        reportStatus('일시정지');
+        emit();
+      },
+      waiting: () => {
+        if (video.paused) return;
+        reportStatus('버퍼링');
+        if (!video.seeking && playback.waiting()) emit(null, true);
+      },
+      error: mediaError,
+    };
 
     async function connect() {
       const endpoint = whepUrl(url);
@@ -117,8 +148,7 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
           fail('WebRTC 연결이 끊겼습니다.');
         }
       };
-      video.addEventListener('playing', playing);
-      video.addEventListener('error', mediaError);
+      Object.entries(listeners).forEach(([event, handler]) => video.addEventListener(event, handler));
 
       const offer = await peer.createOffer();
       if (stopped) return;
@@ -159,9 +189,13 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
       if (!stopped) await peer.setRemoteDescription({ type: 'answer', sdp });
     }
 
+    reportStatus('연결 중');
     connect().catch((error) => fail(error.message));
-    return close;
-  }, [url, attempt, small, onMetrics]);
+    return () => {
+      close();
+      onStatus?.(null);
+    };
+  }, [url, attempt, small, onMetrics, onStatus]);
 
   return (
     <>
@@ -172,13 +206,12 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
           <div className="video-placeholder">
             <div className="video-orbit video-orbit-one" /><div className="video-orbit video-orbit-two" />
             <div className="video-play-icon"><Radio size={32} /></div>
-            <strong>LIVE STREAM</strong>
+            <strong>LIVE 영상</strong>
             <p>연결된 영상 소스가 없습니다</p>
             {!small && <button className="video-source-btn" onClick={onConnect}>영상 소스 설정 <ArrowRight size={15} /></button>}
           </div>
         )}
-        <div className="video-overlay"><span className="badge badge-red"><span className="badge-dot" />LIVE</span><span>STREAM 01</span></div>
-        {!url && <div className="video-corner-mark">NO SIGNAL</div>}
+        <div className="video-overlay"><span className="badge badge-cyan"><span className="badge-dot" />LIVE</span></div>
       </div>
       {url && (
         <div className="player-footer">
@@ -190,7 +223,7 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
           }}>다시 연결</button>}
         </div>
       )}
-      {!small && (
+      {!small && showMetrics && (
         <section className="live-receiver-metrics" aria-label="WebRTC 영상 수신 지표">
           <strong>WebRTC 영상 수신 지표</strong>
           <span>MediaMTX → 브라우저</span>
