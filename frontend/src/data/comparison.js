@@ -20,7 +20,7 @@ export function summarizeRecording(recording) {
     jitter: average('live', 'jitter'),
     buffer: average('vod', 'buffer'),
     vodBitrate: average('vod', 'bitrate'),
-    bufferingCount: recording.samples.some((sample) => sample.mode === 'vod')
+    bufferingCount: recording.samples.some((sample) => sample.mode === 'vod' && Number.isFinite(sample.bufferingCount))
       ? recording.samples.filter((sample) => sample.mode === 'vod' && sample.bufferingEvent).length : null,
   };
 }
@@ -37,7 +37,8 @@ export function recordingCsv(recording) {
       recording.condition, 'user_label_unverified', event, new Date(timestamp).toISOString(),
       sample && (live ? 'webrtc_inbound' : 'hls_player'), sample?.mode,
       sample?.packetLoss, live ? sample.bitrate : null, sample?.jitter, sample?.buffer,
-      sample && !live ? sample.bitrate : null, sample && !live ? Number(sample.bufferingEvent) : null,
+      sample && !live ? sample.bitrate : null,
+      sample && !live && Number.isFinite(sample.bufferingCount) ? Number(sample.bufferingEvent) : null,
     ].map((value) => value ?? 'N/A').join(',');
   });
   return '\uFEFF' + [header, ...rows].join('\r\n');

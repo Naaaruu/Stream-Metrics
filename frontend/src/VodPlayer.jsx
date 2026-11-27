@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Play } from 'lucide-react';
 import Hls from 'hls.js';
+import { readHlsSegment } from './data/vodMetrics.js';
+import { vodSegmentRoute } from './data/netemApi.js';
 
 export default function VodPlayer({ url, onConnect, small = false, onMetrics }) {
   return <VodSession key={url} url={url} onConnect={onConnect} small={small} onMetrics={onMetrics} />;
@@ -38,30 +40,66 @@ function VodPlayback({ url, onStop, onMetrics }) {
 
   useEffect(() => {
     const video = videoRef.current;
+    const sessionId = Symbol();
+    const startedAt = performance.now();
+    const usesHls = /\.m3u8(?:[?#]|$)/i.test(url) && Hls.isSupported();
     let hls;
     let failed = false;
-    let hasPlayed = false;
-    let buffering = false;
+    let startupSec = null;
+    let bufferingSince = null;
     let bufferingCount = 0;
+    let bufferingSeconds = 0;
+    let seeking = false;
+    let latestThroughputKbps = null;
 
-    function measure(bufferingEvent = false) {
-      if (failed || video.readyState === 0) return;
-      let buffer = 0;
-      for (let index = 0; index < video.buffered.length; index += 1) {
-        if (video.buffered.start(index) <= video.currentTime && video.currentTime < video.buffered.end(index)) {
-          buffer = video.buffered.end(index) - video.currentTime;
-          break;
+    function measure({ bufferingEvent = false, segment = null } = {}) {
+      if (failed) return;
+      let buffer = null;
+      if (video.readyState > 0) {
+        buffer = 0;
+        for (let index = 0; index < video.buffered.length; index += 1) {
+          if (video.buffered.start(index) <= video.currentTime && video.currentTime < video.buffered.end(index)) {
+            buffer = video.buffered.end(index) - video.currentTime;
+            break;
+          }
         }
       }
-      const bandwidth = hls?.levels[hls.currentLevel]?.attrs.BANDWIDTH;
-      const bitrate = Number(bandwidth);
-      const sample = { buffer, bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate / 1000 : null, bufferingCount };
+      const bitrate = Number(hls?.levels[hls.currentLevel]?.attrs.BANDWIDTH);
+      const currentStallSeconds = bufferingSince === null ? 0 : (performance.now() - bufferingSince) / 1000;
+      const sample = {
+        sessionId,
+        usesHls,
+        buffer,
+        bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate / 1000 : null,
+        segmentRoute: segment ? vodSegmentRoute(segment.responseUrl) : null,
+        throughputKbps: segment?.throughputKbps ?? null,
+        latestThroughputKbps,
+        bufferingCount: startupSec === null ? null : bufferingCount,
+        bufferingSeconds: startupSec === null ? null : bufferingSeconds + currentStallSeconds,
+        startupSec,
+        bufferingEvent,
+        timestamp: Date.now(),
+      };
       setMetrics(sample);
-      onMetrics?.({ ...sample, bufferingEvent: bufferingEvent === true, timestamp: Date.now() });
+      onMetrics?.(sample);
+    }
+
+    function finishBuffering() {
+      if (bufferingSince === null) return;
+      bufferingSeconds += (performance.now() - bufferingSince) / 1000;
+      bufferingSince = null;
+    }
+
+    function startPlayback() {
+      // Attribute-based autoplay can be suspended outside the viewport.
+      // If playback is blocked, the native controls still allow a manual start.
+      void video.play().catch(() => {});
     }
 
     function fail(detail) {
       if (failed) return;
+      finishBuffering();
+      measure();
       failed = true;
       hls?.stopLoad();
       setStatus(`오류 · ${detail}`);
@@ -76,37 +114,55 @@ function VodPlayback({ url, onStop, onMetrics }) {
       },
       playing: () => {
         if (failed) return;
-        hasPlayed = true;
-        buffering = false;
+        startupSec ??= (performance.now() - startedAt) / 1000;
+        seeking = false;
+        finishBuffering();
         setStatus('재생 중');
         measure();
       },
       pause: () => {
-        buffering = false;
+        finishBuffering();
         if (!failed && !video.ended) setStatus('일시정지');
+        measure();
       },
       waiting: () => {
-        if (failed || video.paused) return;
+        if (failed || video.paused || video.ended) return;
         setStatus('버퍼링');
-        if (hasPlayed && !video.seeking && !buffering) {
-          buffering = true;
+        if (startupSec !== null && !seeking && !video.seeking && bufferingSince === null) {
+          bufferingSince = performance.now();
           bufferingCount += 1;
-          measure(true);
+          measure({ bufferingEvent: true });
         }
       },
-      seeking: () => { if (!failed && !video.paused) setStatus('버퍼링'); },
+      seeking: () => {
+        seeking = true;
+        finishBuffering();
+        if (!failed && !video.paused) setStatus('버퍼링');
+        measure();
+      },
       seeked: () => {
         if (!failed) setStatus(video.ended ? '재생 완료' : video.paused ? '일시정지' : video.readyState < 3 ? '버퍼링' : '재생 중');
         measure();
       },
-      ended: () => { if (!failed) setStatus('재생 완료'); measure(); },
+      ended: () => {
+        finishBuffering();
+        if (!failed) setStatus('재생 완료');
+        measure();
+      },
       error: () => fail(video.error?.message || '영상 파일을 재생할 수 없습니다.'),
     };
     Object.entries(listeners).forEach(([event, handler]) => video.addEventListener(event, handler));
 
-    if (/\.m3u8(?:[?#]|$)/i.test(url) && Hls.isSupported()) {
+    if (usesHls) {
       hls = new Hls({ enableWorker: true });
-      hls.on(Hls.Events.LEVEL_SWITCHED, measure);
+      hls.once(Hls.Events.MEDIA_ATTACHED, startPlayback);
+      hls.on(Hls.Events.LEVEL_SWITCHED, () => measure());
+      hls.on(Hls.Events.FRAG_LOADED, (_, data) => {
+        const segment = readHlsSegment(data);
+        if (!segment) return;
+        latestThroughputKbps = segment.throughputKbps;
+        measure({ segment });
+      });
       hls.on(Hls.Events.LEVEL_LOADED, (_, data) => {
         if (data.details.live) fail('종료 지점이 있는 HLS VOD 주소를 입력하세요.');
       });
@@ -117,9 +173,13 @@ function VodPlayback({ url, onStop, onMetrics }) {
       hls.attachMedia(video);
     } else {
       video.src = url;
+      startPlayback();
     }
 
-    const timer = window.setInterval(measure, 1000);
+    measure();
+    const timer = window.setInterval(() => {
+      if (!video.ended) measure();
+    }, 1000);
     return () => {
       window.clearInterval(timer);
       Object.entries(listeners).forEach(([event, handler]) => video.removeEventListener(event, handler));
@@ -133,14 +193,14 @@ function VodPlayback({ url, onStop, onMetrics }) {
 
   return (
     <div className="vod-playback">
-      <video ref={videoRef} className="stream-video" controls autoPlay muted playsInline preload="metadata" aria-label="VOD 영상 재생" />
+      <video ref={videoRef} className="stream-video" controls muted playsInline preload="metadata" aria-label="VOD 영상 재생" />
       <div className="vod-playback-details">
         <div className="player-footer">
           <span role="status">{status}</span>
           <button className="video-source-btn" onClick={onStop}>재생 종료</button>
         </div>
         <dl aria-label="VOD 플레이어 지표">
-          <div><dt>버퍼 잔여량 · 플레이어 측정</dt><dd>{metrics ? `${metrics.buffer.toFixed(1)} s` : '미측정'}</dd></div>
+          <div><dt>버퍼 잔여량 · 플레이어 측정</dt><dd>{metrics?.buffer == null ? '미측정' : `${metrics.buffer.toFixed(1)} s`}</dd></div>
           <div><dt>선택 화질 · HLS 명목 비트레이트</dt><dd>{metrics?.bitrate == null ? '미측정' : `${Math.round(metrics.bitrate).toLocaleString('ko-KR')} kbps`}</dd></div>
         </dl>
       </div>

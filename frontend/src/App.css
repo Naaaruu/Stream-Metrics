@@ -222,6 +222,8 @@ h1 { margin-bottom: 10px; font-size: clamp(25px, 2.25vw, 34px); letter-spacing: 
 .experiment-actions [role="status"] { color: #9bb0c4; font-size: 12px; }
 .experiment-actions button:disabled { opacity: .5; cursor: default; }
 .experiment-error { color: #ff9caa; font-size: 12px; }
+.test-banner p.experiment-error { color: #ff9caa; }
+.experiment-model-note { color: #9bb0c4; font-size: 12px; line-height: 1.6; }
 .comparison-section { margin-top: 18px; }
 .comparison-controls select { margin-left: 6px; border: 1px solid #31465a; border-radius: 8px; background: #0b1728; color: #e5f4ff; padding: 8px; }
 .comparison-controls > span { margin-left: 4px; }

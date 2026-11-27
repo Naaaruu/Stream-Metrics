@@ -31,3 +31,16 @@ export const clearNetem = () => request('DELETE');
 export const getNetemStatus = () => request('GET');
 
 export const proxiedVodUrl = (result) => (result?.vod?.ok ? `${API_BASE}${result.vod.proxyPath}` : null);
+
+export function vodSegmentRoute(responseUrl) {
+  if (!responseUrl) return 'unknown';
+  try {
+    const url = new URL(responseUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) return 'unknown';
+    return url.origin === API_BASE && url.pathname.startsWith('/api/vod-proxy/')
+      ? 'proxy'
+      : 'direct';
+  } catch {
+    return 'unknown';
+  }
+}

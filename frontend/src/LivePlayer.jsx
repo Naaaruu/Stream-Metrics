@@ -107,7 +107,10 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
       peer.addTransceiver('audio', { direction: 'recvonly' });
       peer.ontrack = ({ track }) => {
         stream.addTrack(track);
-        if (!video.srcObject) video.srcObject = stream;
+        if (video.srcObject) return;
+        video.srcObject = stream;
+        // Attribute-based autoplay can be suspended outside the viewport.
+        void video.play().catch(() => {});
       };
       peer.onconnectionstatechange = () => {
         if (['failed', 'disconnected'].includes(peer.connectionState)) {
@@ -164,7 +167,7 @@ function LiveSession({ url, onConnect, small = false, onMetrics }) {
     <>
       <div className={`video-panel video-live ${small ? 'video-small' : ''}`}>
         {url ? (
-          <video ref={videoRef} className="stream-video" controls autoPlay muted playsInline aria-label="LIVE 영상 재생" />
+          <video ref={videoRef} className="stream-video" controls muted playsInline aria-label="LIVE 영상 재생" />
         ) : (
           <div className="video-placeholder">
             <div className="video-orbit video-orbit-one" /><div className="video-orbit video-orbit-two" />
